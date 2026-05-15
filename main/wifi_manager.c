@@ -24,7 +24,9 @@ static void do_forget(void) {
 static TaskHandle_t s_led_task = NULL;
 
 static void led_blink_task(void *arg) {
+    gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+    ESP_LOGI(TAG, "LED blink started on GPIO %d", LED_GPIO);
     while (1) {
         gpio_set_level(LED_GPIO, 1);
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -35,7 +37,7 @@ static void led_blink_task(void *arg) {
 
 static void led_start(void) {
     if (!s_led_task)
-        xTaskCreate(led_blink_task, "led_blink", 1024, NULL, 3, &s_led_task);
+        xTaskCreate(led_blink_task, "led_blink", 2048, NULL, 3, &s_led_task);
 }
 
 static void led_stop(void) {
@@ -135,6 +137,7 @@ void wifi_manager_start_ap(void) {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG, "AP started — SSID: %s  IP: %s", WIFI_AP_SSID, WIFI_AP_IP);
+    led_start();
 }
 
 void wifi_manager_start_sta(const char *ssid, const char *password) {
