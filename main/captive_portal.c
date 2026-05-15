@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_system.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
@@ -12,7 +13,8 @@
 
 static const char *TAG = "captive";
 
-#define PORTAL_URL "http://" WIFI_AP_IP "/"
+#define PORTAL_URL      "http://" WIFI_AP_IP "/"
+#define MAX_SCAN_APS    15
 
 static const char HTML_INDEX[] =
     "<!DOCTYPE html><html lang=\"en\"><head>"
@@ -26,7 +28,7 @@ static const char HTML_INDEX[] =
     ".card{background:#16213e;border-radius:8px;padding:2rem;width:100%;max-width:380px;"
     "box-shadow:0 4px 20px rgba(0,0,0,.4)}"
     "h1{margin:0 0 .5rem;font-size:1.4rem;color:#e94560}"
-    "p{margin:0 0 1.5rem;color:#aaa;font-size:.9rem}"
+    "p{margin:0 0 1rem;color:#aaa;font-size:.9rem}"
     "label{display:block;margin-bottom:1rem}"
     "span{display:block;margin-bottom:.3rem;font-size:.85rem;color:#ccc}"
     "input{width:100%;padding:.6rem .8rem;border:1px solid #0f3460;border-radius:4px;"
@@ -35,18 +37,63 @@ static const char HTML_INDEX[] =
     "button{width:100%;padding:.75rem;background:#e94560;color:#fff;border:none;"
     "border-radius:4px;font-size:1rem;cursor:pointer;margin-top:.5rem}"
     "button:hover{background:#c73652}"
+    ".nets{margin:.25rem 0 1.25rem}"
+    ".net{display:flex;align-items:center;padding:.45rem .6rem;"
+    "border:1px solid #0f3460;border-radius:4px;margin-bottom:.3rem;"
+    "cursor:pointer;background:#0f3460;gap:.5rem}"
+    ".net:hover{border-color:#e94560}"
+    ".nm{flex:1;font-size:.88rem;overflow:hidden;text-overflow:ellipsis;"
+    "white-space:nowrap;margin-bottom:0;color:#eee}"
+    ".bars{display:flex;align-items:flex-end;gap:2px;flex-shrink:0}"
+    ".bars span{display:block;width:4px;border-radius:1px;background:#333;margin-bottom:0}"
+    ".bars .on{background:#e94560}"
+    ".hint{color:#888;font-size:.82rem;text-align:center;padding:.5rem 0}"
+    "a{color:#e94560;text-decoration:none}"
     "</style></head><body>"
     "<div class=\"card\">"
     "<h1>OSC Controller</h1>"
-    "<p>Connect to your WiFi network to get started.</p>"
+    "<p>Select a network below or type the name manually.</p>"
+    "<div class=\"nets\" id=\"nets\"><div class=\"hint\">Scanning\xe2\x80\xa6</div></div>"
     "<form method=\"POST\" action=\"/save\">"
     "<label><span>Network Name (SSID)</span>"
-    "<input type=\"text\" name=\"ssid\" required maxlength=\"32\""
+    "<input type=\"text\" name=\"ssid\" id=\"si\" required maxlength=\"32\""
     " autocomplete=\"off\" autocorrect=\"off\" spellcheck=\"false\"></label>"
     "<label><span>Password</span>"
-    "<input type=\"password\" name=\"password\" maxlength=\"64\"></label>"
+    "<input type=\"password\" name=\"password\" id=\"pi\" maxlength=\"64\"></label>"
     "<button type=\"submit\">Connect</button>"
-    "</form></div></body></html>";
+    "</form></div>"
+    "<script>(function(){"
+    "var L=document.getElementById('nets'),"
+    "S=document.getElementById('si'),"
+    "P=document.getElementById('pi');"
+    "function bars(r){"
+    "var n=r>=-55?4:r>=-67?3:r>=-79?2:1,"
+    "s='<div class=\"bars\">',"
+    "h=[4,7,10,13];"
+    "for(var i=0;i<4;i++)"
+    "s+='<span style=\"height:'+h[i]+'px\"'+(i<n?' class=\"on\"':'')+' ></span>';"
+    "return s+'</div>';}"
+    "function esc(s){"
+    "return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')"
+    ".replace(/>/g,'&gt;').replace(/\"/g,'&quot;');}"
+    "fetch('/scan').then(function(r){return r.json();})"
+    ".then(function(d){"
+    "if(!d.networks||!d.networks.length){"
+    "L.innerHTML='<div class=\"hint\">No networks found."
+    " <a href=\"javascript:location.reload()\">Retry</a></div>';return;}"
+    "var h='';"
+    "d.networks.forEach(function(n){"
+    "h+='<div class=\"net\" onclick=\"sel(this)\" data-s=\"'+esc(n.s)+'\">';"
+    "h+=bars(n.r);"
+    "h+='<span class=\"nm\">'+esc(n.s)+'</span>';"
+    "if(n.a)h+='<span style=\"font-size:.75rem;margin-bottom:0\">&#x1F512;</span>';"
+    "h+='</div>';});"
+    "L.innerHTML=h;})"
+    ".catch(function(){L.innerHTML="
+    "'<div class=\"hint\">Scan unavailable</div>';});"
+    "window.sel=function(e){S.value=e.dataset.s;P.focus();};"
+    "})();</script>"
+    "</body></html>";
 
 static const char HTML_SAVED[] =
     "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -95,6 +142,96 @@ static void parse_form_field(const char *body, const char *key,
 }
 
 /* ---------- HTTP handlers ------------------------------------------------ */
+
+static bool s_sta_netif_created = false;
+
+static esp_err_t handler_scan(httpd_req_t *req) {
+    if (!s_sta_netif_created) {
+        esp_netif_create_default_wifi_sta();
+        s_sta_netif_created = true;
+    }
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+
+    wifi_scan_config_t scan_cfg = {
+        .ssid        = NULL,
+        .bssid       = NULL,
+        .channel     = 0,
+        .show_hidden = false,
+    };
+    if (esp_wifi_scan_start(&scan_cfg, true) != ESP_OK) {
+        ESP_LOGW(TAG, "scan failed");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"networks\":[]}");
+    }
+
+    uint16_t count = MAX_SCAN_APS;
+    wifi_ap_record_t *recs = malloc(count * sizeof(wifi_ap_record_t));
+    if (!recs) {
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"networks\":[]}");
+    }
+    esp_wifi_scan_get_ap_records(&count, recs);
+
+    /* sort by RSSI descending (strongest first) */
+    for (int i = 0; i < (int)count - 1; i++) {
+        for (int j = 0; j < (int)count - i - 1; j++) {
+            if (recs[j].rssi < recs[j + 1].rssi) {
+                wifi_ap_record_t tmp = recs[j];
+                recs[j]     = recs[j + 1];
+                recs[j + 1] = tmp;
+            }
+        }
+    }
+
+    char *buf = malloc(2048);
+    if (!buf) {
+        free(recs);
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"networks\":[]}");
+    }
+
+    int pos = snprintf(buf, 2048, "{\"networks\":[");
+    bool first = true;
+
+    for (uint16_t i = 0; i < count && pos < 1900; i++) {
+        if (recs[i].ssid[0] == '\0') continue; /* skip hidden */
+
+        /* deduplicate: skip if SSID already appeared earlier */
+        bool dup = false;
+        for (uint16_t j = 0; j < i; j++) {
+            if (strcmp((char *)recs[i].ssid, (char *)recs[j].ssid) == 0) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+
+        /* JSON-escape the SSID (handle " and \ only; skip control chars) */
+        char esc[68];
+        int eo = 0;
+        for (int k = 0; recs[i].ssid[k] && eo < (int)sizeof(esc) - 2; k++) {
+            unsigned char c = recs[i].ssid[k];
+            if (c < 0x20) continue;
+            if (c == '"' || c == '\\') esc[eo++] = '\\';
+            esc[eo++] = (char)c;
+        }
+        esc[eo] = '\0';
+
+        pos += snprintf(buf + pos, 2048 - pos, "%s{\"s\":\"%s\",\"r\":%d,\"a\":%d}",
+                        first ? "" : ",", esc, recs[i].rssi,
+                        recs[i].authmode != WIFI_AUTH_OPEN ? 1 : 0);
+        first = false;
+    }
+
+    snprintf(buf + pos, 2048 - pos, "]}");
+    free(recs);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    esp_err_t ret = httpd_resp_sendstr(req, buf);
+    free(buf);
+    return ret;
+}
 
 static esp_err_t handler_index(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
@@ -222,13 +359,14 @@ static void dns_server_task(void *arg) {
 
 void captive_portal_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 9;
 
     httpd_handle_t server = NULL;
     ESP_ERROR_CHECK(httpd_start(&server, &config));
 
     static const httpd_uri_t routes[] = {
         { .uri = "/",                    .method = HTTP_GET,  .handler = handler_index    },
+        { .uri = "/scan",                .method = HTTP_GET,  .handler = handler_scan     },
         { .uri = "/save",                .method = HTTP_POST, .handler = handler_save     },
         /* OS captive-portal detection endpoints */
         { .uri = "/generate_204",        .method = HTTP_GET,  .handler = handler_redirect },
