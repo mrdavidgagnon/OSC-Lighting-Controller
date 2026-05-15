@@ -352,14 +352,28 @@ static void onyx_task(void *arg) {
     }
     ESP_LOGI(TAG, "listening for OSC on UDP port %u", port);
 
-    uint8_t buf[512];
+    uint8_t buf[1024];
     while (1) {
-        int len = recv(sock, buf, sizeof(buf) - 1, 0);
+        int len = recv(sock, buf, sizeof(buf), 0);
         if (len <= 0) continue;
-        osc_msg_t msg;
-        if (!osc_parse(buf, len, &msg)) { ESP_LOGW(TAG, "invalid OSC packet"); continue; }
-        ESP_LOGD(TAG, "OSC %s  types=%s", msg.address, msg.types);
-        dispatch(msg.address, &msg);
+
+        if (osc_is_bundle(buf, len)) {
+            osc_bundle_iter_t it;
+            osc_bundle_init(buf, len, &it);
+            const uint8_t *mbuf;
+            int mlen;
+            while (osc_bundle_next(&it, &mbuf, &mlen)) {
+                osc_msg_t msg;
+                if (!osc_parse(mbuf, mlen, &msg)) continue;
+                ESP_LOGD(TAG, "OSC(bundle) %s  types=%s", msg.address, msg.types);
+                dispatch(msg.address, &msg);
+            }
+        } else {
+            osc_msg_t msg;
+            if (!osc_parse(buf, len, &msg)) { ESP_LOGW(TAG, "invalid OSC packet"); continue; }
+            ESP_LOGD(TAG, "OSC %s  types=%s", msg.address, msg.types);
+            dispatch(msg.address, &msg);
+        }
     }
 
     close(sock);

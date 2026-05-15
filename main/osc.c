@@ -60,10 +60,34 @@ float osc_float(const osc_msg_t *msg, int idx) {
 }
 
 int32_t osc_int(const osc_msg_t *msg, int idx) {
-    if (!msg->types[idx] || msg->types[idx] != 'i') return 0;
+    char t = msg->types[idx];
+    if (!t || (t != 'i' && t != 'r')) return 0;
     int off = arg_offset(msg, idx);
     if (off < 0) return 0;
     return (int32_t)read_u32(msg->args + off);
+}
+
+bool osc_is_bundle(const uint8_t *buf, int len) {
+    return len >= 16 && memcmp(buf, "#bundle\0", 8) == 0;
+}
+
+bool osc_bundle_init(const uint8_t *buf, int len, osc_bundle_iter_t *it) {
+    if (!osc_is_bundle(buf, len)) return false;
+    it->_buf = buf;
+    it->_len = len;
+    it->_off = 16;  /* skip "#bundle\0" (8 bytes) + timetag (8 bytes) */
+    return true;
+}
+
+bool osc_bundle_next(osc_bundle_iter_t *it, const uint8_t **out_buf, int *out_len) {
+    if (it->_off + 4 > it->_len) return false;
+    int size = (int)read_u32(it->_buf + it->_off);
+    it->_off += 4;
+    if (size <= 0 || it->_off + size > it->_len) return false;
+    *out_buf = it->_buf + it->_off;
+    *out_len = size;
+    it->_off += size;
+    return true;
 }
 
 const char *osc_string(const osc_msg_t *msg, int idx) {
