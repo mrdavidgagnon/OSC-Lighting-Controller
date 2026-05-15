@@ -7,14 +7,18 @@
 #define ONYX_FADER_MAX  255.0f      /* ONYX native fader range (DMX, 0–255)    */
 #define ONYX_NVS_NS     "osc_cfg"   /* NVS namespace for OSC settings          */
 
-/* ONYX object IDs to monitor — adjust to match your patch */
-#define ONYX_FADER_ID   4203
-#define ONYX_BUTTON_ID  4204
+/* 20 fader strips: bases 4200–4290 (faders 1–10) then 4600–4690 (faders 11–20) */
+#define ONYX_NUM_FADERS 20
 
-/* Button LED IDs associated with the fader */
-#define ONYX_BTN_LED_1  4201   /* on/off, color, blink */
-#define ONYX_BTN_LED_2  4202   /* on/off, color, blink */
-#define ONYX_BTN_LED_3  4205   /* on/off, color only   */
+typedef struct {
+    int fader;   /* /Mx/fader/XXXX */
+    int button;  /* /Mx/button/XXXX — label, color, text color */
+    int led1;    /* button LED: on/off, color, blink */
+    int led2;    /* button LED: on/off, color, blink */
+    int led3;    /* button LED: on/off, color only   */
+} onyx_fader_cfg_t;
+
+extern const onyx_fader_cfg_t onyx_faders[ONYX_NUM_FADERS];
 
 typedef struct {
     bool on;
@@ -45,3 +49,9 @@ uint16_t onyx_load_port(void);
 uint16_t onyx_load_server_port(void);
 void     onyx_load_onyx_ip(char *buf, size_t len);
 void     onyx_save_settings(uint16_t listen_port, uint16_t server_port, const char *onyx_ip);
+
+/* Send an OSC button press to the ONYX console (val=1 press, val=0 release) */
+void onyx_send_button_press(int id, int val);
+
+/* Send an OSC fader value to the ONYX console (value in ONYX native range 0–255) */
+void onyx_send_fader(int id, float value);

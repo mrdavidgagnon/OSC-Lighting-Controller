@@ -155,13 +155,13 @@ static struct {
     char color[16];
     bool blink;
     bool valid;
-} s_leds[16];
+} s_leds[64];
 static int s_n_leds;
 
 static int led_find_or_alloc(int id) {
     for (int i = 0; i < s_n_leds; i++)
         if (s_leds[i].id == id) return i;
-    if (s_n_leds < 16) { s_leds[s_n_leds].id = id; return s_n_leds++; }
+    if (s_n_leds < 64) { s_leds[s_n_leds].id = id; return s_n_leds++; }
     return -1;
 }
 
@@ -379,6 +379,118 @@ static void onyx_task(void *arg) {
     close(sock);
     vTaskDelete(NULL);
 }
+
+/* ---------- OSC send ----------------------------------------------------- */
+
+void onyx_send_fader(int id, float value) {
+    char onyx_ip[32] = {};
+    onyx_load_onyx_ip(onyx_ip, sizeof(onyx_ip));
+    if (!onyx_ip[0]) { ESP_LOGW(TAG, "fader: no ONYX IP configured"); return; }
+    uint16_t port = onyx_load_server_port();
+
+    char addr[32];
+    snprintf(addr, sizeof(addr), "/Mx/fader/%d", id);
+
+    uint8_t buf[64] = {};
+    int pos = 0;
+
+    int alen = (int)strlen(addr) + 1;
+    memcpy(buf, addr, alen);
+    pos = (alen + 3) & ~3;
+
+    buf[pos++] = ','; buf[pos++] = 'f'; buf[pos++] = '\0';
+    while (pos & 3) buf[pos++] = '\0';
+
+    uint32_t raw;
+    memcpy(&raw, &value, sizeof(raw));
+    buf[pos++] = (uint8_t)(raw >> 24);
+    buf[pos++] = (uint8_t)(raw >> 16);
+    buf[pos++] = (uint8_t)(raw >>  8);
+    buf[pos++] = (uint8_t) raw;
+
+    struct sockaddr_in dest = { .sin_family = AF_INET, .sin_port = htons(port) };
+    if (inet_pton(AF_INET, onyx_ip, &dest.sin_addr) <= 0) {
+        ESP_LOGW(TAG, "fader: invalid ONYX IP '%s'", onyx_ip); return;
+    }
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) { ESP_LOGE(TAG, "fader: socket() failed"); return; }
+    sendto(sock, buf, pos, 0, (struct sockaddr *)&dest, sizeof(dest));
+    close(sock);
+    ESP_LOGD(TAG, "OSC /Mx/fader/%d = %.2f → %s:%u", id, (double)value, onyx_ip, port);
+}
+
+void onyx_send_button_press(int id, int val) {
+    char onyx_ip[32] = {};
+    onyx_load_onyx_ip(onyx_ip, sizeof(onyx_ip));
+    if (!onyx_ip[0]) {
+        ESP_LOGW(TAG, "press: no ONYX IP configured");
+        return;
+    }
+    uint16_t port = onyx_load_server_port();
+
+    char addr[32];
+    snprintf(addr, sizeof(addr), "/Mx/button/%d", id);
+
+    uint8_t buf[64] = {};
+    int pos = 0;
+
+    /* Address string padded to 4-byte boundary */
+    int alen = (int)strlen(addr) + 1;
+    memcpy(buf, addr, alen);
+    pos = (alen + 3) & ~3;
+
+    /* Type tag ",i" padded to 4-byte boundary */
+    buf[pos++] = ','; buf[pos++] = 'i'; buf[pos++] = '\0';
+    while (pos & 3) buf[pos++] = '\0';
+
+    /* Int32 argument big-endian */
+    uint32_t v = (uint32_t)val;
+    buf[pos++] = (uint8_t)(v >> 24);
+    buf[pos++] = (uint8_t)(v >> 16);
+    buf[pos++] = (uint8_t)(v >>  8);
+    buf[pos++] = (uint8_t) v;
+
+    struct sockaddr_in dest = {
+        .sin_family = AF_INET,
+        .sin_port   = htons(port),
+    };
+    if (inet_pton(AF_INET, onyx_ip, &dest.sin_addr) <= 0) {
+        ESP_LOGW(TAG, "press: invalid ONYX IP '%s'", onyx_ip);
+        return;
+    }
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) { ESP_LOGE(TAG, "press: socket() failed"); return; }
+    sendto(sock, buf, pos, 0, (struct sockaddr *)&dest, sizeof(dest));
+    close(sock);
+    ESP_LOGD(TAG, "OSC /Mx/button/%d = %d → %s:%u", id, val, onyx_ip, port);
+}
+
+/* ---------- fader config table ------------------------------------------- */
+
+const onyx_fader_cfg_t onyx_faders[ONYX_NUM_FADERS] = {
+    /* bases 420X, X=0..9 */
+    {4203, 4204, 4201, 4202, 4205},
+    {4213, 4214, 4211, 4212, 4215},
+    {4223, 4224, 4221, 4222, 4225},
+    {4233, 4234, 4231, 4232, 4235},
+    {4243, 4244, 4241, 4242, 4245},
+    {4253, 4254, 4251, 4252, 4255},
+    {4263, 4264, 4261, 4262, 4265},
+    {4273, 4274, 4271, 4272, 4275},
+    {4283, 4284, 4281, 4282, 4285},
+    {4293, 4294, 4291, 4292, 4295},
+    /* bases 460X, X=0..9 */
+    {4603, 4604, 4601, 4602, 4605},
+    {4613, 4614, 4611, 4612, 4615},
+    {4623, 4624, 4621, 4622, 4625},
+    {4633, 4634, 4631, 4632, 4635},
+    {4643, 4644, 4641, 4642, 4645},
+    {4653, 4654, 4651, 4652, 4655},
+    {4663, 4664, 4661, 4662, 4665},
+    {4673, 4674, 4671, 4672, 4675},
+    {4683, 4684, 4681, 4682, 4685},
+    {4693, 4694, 4691, 4692, 4695},
+};
 
 /* ---------- public API --------------------------------------------------- */
 

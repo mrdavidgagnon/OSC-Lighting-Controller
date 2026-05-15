@@ -69,7 +69,7 @@ static const char HTML_A[] =
     "*{box-sizing:border-box}"
     "body{font-family:system-ui,sans-serif;margin:0;padding:1rem;background:#1a1a2e;"
     "color:#eee;min-height:100vh;display:flex;align-items:center;justify-content:center}"
-    ".card{background:#16213e;border-radius:8px;padding:2rem;width:100%;max-width:420px;"
+    ".card{background:#16213e;border-radius:8px;padding:2rem;width:100%;max-width:960px;"
     "box-shadow:0 4px 20px rgba(0,0,0,.4)}"
     ".tabs{display:flex;gap:.5rem;margin-bottom:1.5rem}"
     ".tab{flex:1;padding:.5rem;background:#0f3460;border:none;border-radius:4px;"
@@ -79,14 +79,6 @@ static const char HTML_A[] =
     "table{width:100%;border-collapse:collapse;margin-bottom:1.5rem}"
     "td{padding:.5rem .25rem;border-bottom:1px solid #0f3460;font-size:.9rem}"
     "td:first-child{color:#aaa;width:40%}td:last-child{font-family:monospace}"
-    ".row{display:flex;justify-content:space-between;padding:.45rem 0;"
-    "border-bottom:1px solid #0f3460;font-size:.9rem;margin-bottom:.1rem}"
-    ".lbl{color:#aaa}"
-    ".track{background:#0f3460;border-radius:4px;height:14px;margin:.85rem 0}"
-    ".fill{background:#e94560;border-radius:4px;height:100%;width:0%;"
-    "transition:width .25s ease}"
-    ".swatch{width:100%;height:40px;border-radius:4px;background:#222;"
-    "margin-top:.5rem;border:1px solid #0f3460;transition:background .25s}"
     "label{display:block;margin-bottom:1rem}"
     "label>span{display:block;margin-bottom:.3rem;font-size:.85rem;color:#ccc}"
     "input{width:100%;padding:.6rem .8rem;border:1px solid #0f3460;border-radius:4px;"
@@ -98,56 +90,46 @@ static const char HTML_A[] =
     ".danger{background:#c0392b;color:#fff}.danger:hover{background:#a93226}"
     ".hint{color:#888;font-size:.8rem;margin:.6rem 0 1rem;line-height:1.5}"
     ".hint b{color:#ccc}"
-    ".leds{margin-top:.85rem;border-top:1px solid #0f3460;padding-top:.75rem}"
-    ".leds-hd{font-size:.78rem;color:#555;text-transform:uppercase;"
-    "letter-spacing:.06em;margin-bottom:.5rem}"
-    ".led-row{display:flex;align-items:center;justify-content:space-between;"
-    "padding:.3rem 0;font-size:.9rem}"
-    ".led-right{display:flex;align-items:center;gap:.5rem}"
-    ".led-dot{width:20px;height:20px;border-radius:4px;background:#111;"
-    "border:1px solid #0f3460;transition:background .2s,box-shadow .2s}"
-    ".blk{font-size:.7rem;padding:.1rem .35rem;border-radius:3px;"
-    "background:#e94560;color:#fff;display:none}"
-    ".blk.on{display:inline}"
-    ".col-sw{flex:1;height:20px;border-radius:3px;background:#111;"
-    "border:1px solid #0f3460;transition:background .2s}"
+    "@keyframes blink{0%,100%{opacity:1}50%{opacity:.12}}"
+    ".strip-row{display:flex;gap:.5rem;overflow-x:auto;-webkit-overflow-scrolling:touch;"
+    "padding:.25rem 0 .5rem}"
+    ".strip{width:80px;flex-shrink:0;border-radius:6px;background:#222;"
+    "display:flex;flex-direction:column;align-items:stretch;"
+    "padding:.5rem .4rem;gap:.3rem;"
+    "box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 2px 8px rgba(0,0,0,.5);"
+    "min-height:320px}"
+    ".strip-lbl{font-size:.78rem;font-weight:600;text-align:center;color:#fff;"
+    "padding:.25rem 0;border-bottom:1px solid rgba(255,255,255,.12);"
+    "margin-bottom:.05rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+    ".s-btn{display:flex;align-items:center;gap:.35rem;"
+    "background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);"
+    "border-radius:3px;padding:.3rem .4rem;margin-top:0;"
+    "cursor:pointer;color:rgba(255,255,255,.85);font-size:.72rem;"
+    "width:100%;text-align:left;-webkit-user-select:none;user-select:none}"
+    ".s-btn:active{background:rgba(255,255,255,.15)}"
+    ".s-led{width:9px;height:9px;border-radius:50%;flex-shrink:0;"
+    "background:#111;border:1px solid rgba(255,255,255,.15);"
+    "transition:background .15s,box-shadow .15s}"
+    ".s-led.blinking{animation:blink .8s step-start infinite}"
+    ".fdr-wrap{flex:1;display:flex;gap:.35rem;align-items:stretch;min-height:140px}"
+    ".fdr-track{flex:1;background:rgba(0,0,0,.4);border-radius:3px;"
+    "position:relative;overflow:hidden;cursor:ns-resize;touch-action:none}"
+    ".fdr-fill{position:absolute;bottom:0;left:0;right:0;"
+    "background:rgba(255,255,255,.35);border-radius:3px;"
+    "height:0%;transition:height .2s ease}"
     "</style></head><body><div class=\"card\">"
     "<div class=\"tabs\">"
     "<button class=\"tab active\" onclick=\"show('net',this)\">Network</button>"
-    "<button class=\"tab\" onclick=\"show('fdr',this)\">Fader</button>"
+    "<button class=\"tab\" onclick=\"show('mon',this)\">Monitor</button>"
     "<button class=\"tab\" onclick=\"show('cfg',this)\">Settings</button>"
     "</div>"
     "<div id=\"p-net\" class=\"panel active\">";
 
-/* MID: end network panel → full fader panel → open settings panel */
+/* MID: end network panel → monitor panel → open settings panel */
 static const char HTML_B[] =
     "</div>"
-    "<div id=\"p-fdr\" class=\"panel\">"
-    "<div class=\"row\"><span class=\"lbl\">Name</span><span id=\"f-name\">\xe2\x80\x94</span></div>"
-    "<div class=\"row\"><span class=\"lbl\">Value</span><span id=\"f-val\">\xe2\x80\x94</span></div>"
-    "<div class=\"track\"><div class=\"fill\" id=\"f-bar\"></div></div>"
-    "<div class=\"swatch\" id=\"f-sw\"></div>"
-    "<div class=\"leds\">"
-    "<div class=\"leds-hd\">Button LEDs</div>"
-    "<div class=\"led-row\"><span class=\"lbl\">Button 1</span>"
-    "<div class=\"led-right\"><div class=\"led-dot\" id=\"l1-dot\"></div>"
-    "<span class=\"blk\" id=\"l1-blk\">BLINK</span></div></div>"
-    "<div class=\"led-row\"><span class=\"lbl\">Button 2</span>"
-    "<div class=\"led-right\"><div class=\"led-dot\" id=\"l2-dot\"></div>"
-    "<span class=\"blk\" id=\"l2-blk\">BLINK</span></div></div>"
-    "<div class=\"led-row\"><span class=\"lbl\">Button 3</span>"
-    "<div class=\"led-right\"><div class=\"led-dot\" id=\"l3-dot\"></div>"
-    "</div></div>"
-    "</div>"
-    "<div class=\"leds\">"
-    "<div class=\"leds-hd\">Button Colors</div>"
-    "<div class=\"led-row\"><span class=\"lbl\">Button</span>"
-    "<div class=\"led-right\" style=\"flex:1;margin-left:.5rem\">"
-    "<div class=\"col-sw\" id=\"b-col\"></div></div></div>"
-    "<div class=\"led-row\"><span class=\"lbl\">Text</span>"
-    "<div class=\"led-right\" style=\"flex:1;margin-left:.5rem\">"
-    "<div class=\"col-sw\" id=\"b-tcol\"></div></div></div>"
-    "</div>"
+    "<div id=\"p-mon\" class=\"panel\">"
+    "<div class=\"strip-row\" id=\"strip-row\"></div>"
     "</div>"
     "<div id=\"p-cfg\" class=\"panel\">";
 
@@ -156,35 +138,126 @@ static const char HTML_C[] =
     "</div></div>"
     "<script>"
     "var T=null;"
-    "function setLed(n,on,col,blink){"
-      "var d=document.getElementById('l'+n+'-dot');"
-      "if(d)d.style.background=on?(col||'#fff'):'#111';"
-      "var b=document.getElementById('l'+n+'-blk');"
-      "if(b)b.className='blk'+(blink?' on':'');"
-    "}"
+    "var FDRS=["
+      "{fi:4203,bi:4204,l1:4201,l2:4202,l3:4205},"
+      "{fi:4213,bi:4214,l1:4211,l2:4212,l3:4215},"
+      "{fi:4223,bi:4224,l1:4221,l2:4222,l3:4225},"
+      "{fi:4233,bi:4234,l1:4231,l2:4232,l3:4235},"
+      "{fi:4243,bi:4244,l1:4241,l2:4242,l3:4245},"
+      "{fi:4253,bi:4254,l1:4251,l2:4252,l3:4255},"
+      "{fi:4263,bi:4264,l1:4261,l2:4262,l3:4265},"
+      "{fi:4273,bi:4274,l1:4271,l2:4272,l3:4275},"
+      "{fi:4283,bi:4284,l1:4281,l2:4282,l3:4285},"
+      "{fi:4293,bi:4294,l1:4291,l2:4292,l3:4295},"
+      "{fi:4603,bi:4604,l1:4601,l2:4602,l3:4605},"
+      "{fi:4613,bi:4614,l1:4611,l2:4612,l3:4615},"
+      "{fi:4623,bi:4624,l1:4621,l2:4622,l3:4625},"
+      "{fi:4633,bi:4634,l1:4631,l2:4632,l3:4635},"
+      "{fi:4643,bi:4644,l1:4641,l2:4642,l3:4645},"
+      "{fi:4653,bi:4654,l1:4651,l2:4652,l3:4655},"
+      "{fi:4663,bi:4664,l1:4661,l2:4662,l3:4665},"
+      "{fi:4673,bi:4674,l1:4671,l2:4672,l3:4675},"
+      "{fi:4683,bi:4684,l1:4681,l2:4682,l3:4685},"
+      "{fi:4693,bi:4694,l1:4691,l2:4692,l3:4695}"
+    "];"
+    "var sts=FDRS.map(function(){return{dragging:false,lastSend:0,val:0,oscLast:-1};});"
+    "var row=document.getElementById('strip-row');"
+    "var TPL="
+      "'<div class=\"strip\" id=\"ss-_\">"
+      "<div class=\"strip-lbl\" id=\"sl-_\">\xe2\x80\x94</div>"
+      "<button class=\"s-btn\" id=\"sb1-_\" type=\"button\">"
+      "<div class=\"s-led\" id=\"led1-_\"></div><span>1</span></button>"
+      "<button class=\"s-btn\" id=\"sb2-_\" type=\"button\">"
+      "<div class=\"s-led\" id=\"led2-_\"></div><span>2</span></button>"
+      "<div class=\"fdr-wrap\">"
+      "<div class=\"fdr-track\" id=\"ft-_\">"
+      "<div class=\"fdr-fill\" id=\"ff-_\"></div></div></div>"
+      "<button class=\"s-btn\" id=\"sb3-_\" type=\"button\">"
+      "<div class=\"s-led\" id=\"led3-_\"></div><span>3</span></button>"
+      "</div>';"
+    "FDRS.forEach(function(f,i){"
+      "row.innerHTML+=TPL.replace(/_/g,i);"
+    "});"
+    "function setLed(el,on,col,blk){"
+      "if(!el)return;"
+      "el.style.background=on?(col||'#fff'):'#111';"
+      "el.style.boxShadow=on?'0 0 5px '+(col||'#fff'):'none';"
+      "el.className='s-led'+(blk?' blinking':'');}"
     "function show(id,btn){"
-      "document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active')});"
-      "document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});"
+      "document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active');});"
+      "document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});"
       "document.getElementById('p-'+id).classList.add('active');"
       "btn.classList.add('active');"
-      "if(id==='fdr'){poll();T=setInterval(poll,300);}"
+      "if(id==='mon'){poll();T=setInterval(poll,300);}"
       "else if(T){clearInterval(T);T=null;}"
     "}"
     "function poll(){"
-      "fetch('/api/fader').then(function(r){return r.json();}).then(function(d){"
-        "document.getElementById('f-name').textContent=d.name||'\xe2\x80\x94';"
-        "document.getElementById('f-val').textContent=d.valid"
-          "?(d.value*100).toFixed(1)+'%':'\xe2\x80\x94';"
-        "document.getElementById('f-bar').style.width=d.valid?(d.value*100)+'%':'0%';"
-        "document.getElementById('f-sw').style.background=d.color||'#222';"
-        "setLed(1,d.b1_on,d.b1_col,d.b1_blk);"
-        "setLed(2,d.b2_on,d.b2_col,d.b2_blk);"
-        "setLed(3,d.b3_on,d.b3_col,false);"
-        "var bc=document.getElementById('b-col');"
-        "if(bc)bc.style.background=d.b4_col||'#111';"
-        "var btc=document.getElementById('b-tcol');"
-        "if(btc)btc.style.background=d.b4_tcol||'#111';"
+      "fetch('/api/fader').then(function(r){return r.json();})"
+      ".then(function(arr){"
+        "arr.forEach(function(d,i){"
+          "var st=sts[i];"
+          "var ss=document.getElementById('ss-'+i);"
+          "if(ss)ss.style.background=d.bc||'#222';"
+          "var lbl=document.getElementById('sl-'+i);"
+          "if(lbl){lbl.textContent=d.n||'\xe2\x80\x94';lbl.style.color=d.tc||'#fff';}"
+          "if(!st.dragging&&d.ok&&d.v!==st.oscLast){"
+            "st.oscLast=d.v;"
+            "var ff=document.getElementById('ff-'+i);"
+            "if(ff)ff.style.height=(d.v*100).toFixed(1)+'%';}"
+          "setLed(document.getElementById('led1-'+i),d.b1,d.b1c,d.b1b);"
+          "setLed(document.getElementById('led2-'+i),d.b2,d.b2c,d.b2b);"
+          "setLed(document.getElementById('led3-'+i),d.b3,d.b3c,false);"
+        "});"
       "}).catch(function(){});}"
+    "function postPress(id,val){"
+      "fetch('/api/press',{method:'POST',"
+      "body:'id='+id+'&val='+val,"
+      "headers:{'Content-Type':'application/x-www-form-urlencoded'}"
+      "}).catch(function(){});}"
+    "function setupFader(track,fill,st,faderId){"
+      "function getT(e){"
+        "var r=track.getBoundingClientRect();"
+        "if(!r.height)return 0;"
+        "var cy=e.touches?e.touches[0].clientY:e.clientY,"
+        "t=1-(cy-r.top)/r.height;"
+        "return Math.max(0,Math.min(1,t));}"
+      "function upd(t){fill.style.height=(t*100).toFixed(1)+'%';}"
+      "function snd(val){"
+        "var now=Date.now();"
+        "if(now-st.lastSend<50)return;"
+        "st.lastSend=now;"
+        "fetch('/api/fader-set',{method:'POST',"
+        "body:'id='+faderId+'&val='+val.toFixed(2),"
+        "headers:{'Content-Type':'application/x-www-form-urlencoded'}"
+        "}).catch(function(){});}"
+      "function dn(e){e.preventDefault();st.dragging=true;st.val=getT(e);upd(st.val);snd(st.val*255);}"
+      "function mv(e){if(!st.dragging)return;e.preventDefault();st.val=getT(e);upd(st.val);snd(st.val*255);}"
+      "function up(){if(st.dragging){st.lastSend=0;snd(st.val*255);}st.dragging=false;}"
+      "track.addEventListener('mousedown',dn);"
+      "window.addEventListener('mousemove',mv);"
+      "window.addEventListener('mouseup',up);"
+      "track.addEventListener('touchstart',dn,{passive:false});"
+      "window.addEventListener('touchmove',mv,{passive:false});"
+      "window.addEventListener('touchend',up);"
+      "window.addEventListener('touchcancel',up);}"
+    "function setupBtn(el,id){"
+      "function dn(e){e.preventDefault();postPress(id,1);}"
+      "function up(e){e.preventDefault();postPress(id,0);}"
+      "el.addEventListener('mousedown',dn);"
+      "el.addEventListener('mouseup',up);"
+      "el.addEventListener('mouseleave',up);"
+      "el.addEventListener('touchstart',dn,{passive:false});"
+      "el.addEventListener('touchend',up,{passive:false});"
+      "el.addEventListener('touchcancel',up,{passive:false});}"
+    "FDRS.forEach(function(f,i){"
+      "setupBtn(document.getElementById('sb1-'+i),f.l1);"
+      "setupBtn(document.getElementById('sb2-'+i),f.l2);"
+      "setupBtn(document.getElementById('sb3-'+i),f.l3);"
+      "setupFader("
+        "document.getElementById('ft-'+i),"
+        "document.getElementById('ff-'+i),"
+        "sts[i],f.fi);"
+    "});"
     "</script>"
     "</body></html>";
 
@@ -287,43 +360,76 @@ static esp_err_t handler_root(httpd_req_t *req) {
 }
 
 static esp_err_t handler_api_fader(httpd_req_t *req) {
-    float value = 0.0f;
-    char  color[16] = "";
-    char  name[64]  = "";
-
-    bool valid = onyx_get_fader(ONYX_FADER_ID, &value, color, sizeof(color));
-    onyx_get_button_text(ONYX_BUTTON_ID, name, sizeof(name));
-
-    onyx_button_led_t led1 = {}, led2 = {}, led3 = {};
-    onyx_get_button_led(ONYX_BTN_LED_1, &led1);
-    onyx_get_button_led(ONYX_BTN_LED_2, &led2);
-    onyx_get_button_led(ONYX_BTN_LED_3, &led3);
-
-    char btn_col[16]  = "";
-    char btn_tcol[16] = "";
-    onyx_get_button_color(ONYX_BUTTON_ID, btn_col, sizeof(btn_col));
-    onyx_get_button_text_color(ONYX_BUTTON_ID, btn_tcol, sizeof(btn_tcol));
-
-    char safe_name[130] = "";
-    json_esc(name, safe_name, sizeof(safe_name));
-
-    char json[430];
-    snprintf(json, sizeof(json),
-        "{\"valid\":%s,\"value\":%.4f,\"name\":\"%s\",\"color\":\"%s\","
-        "\"b1_on\":%d,\"b1_col\":\"%s\",\"b1_blk\":%d,"
-        "\"b2_on\":%d,\"b2_col\":\"%s\",\"b2_blk\":%d,"
-        "\"b3_on\":%d,\"b3_col\":\"%s\","
-        "\"b4_col\":\"%s\",\"b4_tcol\":\"%s\"}",
-        valid ? "true" : "false", (double)value, safe_name,
-        color[0] ? color : "#222222",
-        led1.on, led1.color[0] ? led1.color : "#111111", led1.blink,
-        led2.on, led2.color[0] ? led2.color : "#111111", led2.blink,
-        led3.on, led3.color[0] ? led3.color : "#111111",
-        btn_col[0]  ? btn_col  : "#111111",
-        btn_tcol[0] ? btn_tcol : "#111111");
-
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_sendstr_chunk(req, "[");
+    for (int i = 0; i < ONYX_NUM_FADERS; i++) {
+        const onyx_fader_cfg_t *f = &onyx_faders[i];
+        float value = 0.0f;
+        char  name[64]     = "";
+        char  btn_col[16]  = "";
+        char  btn_tcol[16] = "";
+        onyx_button_led_t led1 = {}, led2 = {}, led3 = {};
+
+        bool valid = onyx_get_fader(f->fader, &value, NULL, 0);
+        onyx_get_button_text(f->button, name, sizeof(name));
+        onyx_get_button_color(f->button, btn_col, sizeof(btn_col));
+        onyx_get_button_text_color(f->button, btn_tcol, sizeof(btn_tcol));
+        onyx_get_button_led(f->led1, &led1);
+        onyx_get_button_led(f->led2, &led2);
+        onyx_get_button_led(f->led3, &led3);
+
+        char safe_name[130] = "";
+        json_esc(name, safe_name, sizeof(safe_name));
+
+        char json[380];
+        snprintf(json, sizeof(json),
+            "%s{\"ok\":%s,\"v\":%.4f,\"n\":\"%s\","
+            "\"bc\":\"%s\",\"tc\":\"%s\","
+            "\"b1\":%d,\"b1c\":\"%s\",\"b1b\":%d,"
+            "\"b2\":%d,\"b2c\":\"%s\",\"b2b\":%d,"
+            "\"b3\":%d,\"b3c\":\"%s\"}",
+            i > 0 ? "," : "",
+            valid ? "true" : "false", (double)value, safe_name,
+            btn_col[0]  ? btn_col  : "#222",
+            btn_tcol[0] ? btn_tcol : "#fff",
+            led1.on, led1.color[0] ? led1.color : "#111", led1.blink,
+            led2.on, led2.color[0] ? led2.color : "#111", led2.blink,
+            led3.on, led3.color[0] ? led3.color : "#111");
+        httpd_resp_sendstr_chunk(req, json);
+    }
+    httpd_resp_sendstr_chunk(req, "]");
+    return httpd_resp_sendstr_chunk(req, NULL);
+}
+
+static esp_err_t handler_api_fader_set(httpd_req_t *req) {
+    char body[48] = {};
+    int len = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (len > 0) {
+        body[len] = '\0';
+        char id_str[10] = {}, val_str[12] = {};
+        parse_field(body, "id",  id_str,  sizeof(id_str));
+        parse_field(body, "val", val_str, sizeof(val_str));
+        int id = atoi(id_str);
+        if (id > 0) onyx_send_fader(id, (float)atof(val_str));
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static esp_err_t handler_api_press(httpd_req_t *req) {
+    char body[48] = {};
+    int len = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (len > 0) {
+        body[len] = '\0';
+        char id_str[10] = {}, val_str[4] = {};
+        parse_field(body, "id",  id_str,  sizeof(id_str));
+        parse_field(body, "val", val_str, sizeof(val_str));
+        int id  = atoi(id_str);
+        int val = atoi(val_str);
+        if (id > 0) onyx_send_button_press(id, val);
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
 static esp_err_t handler_settings(httpd_req_t *req) {
@@ -378,7 +484,9 @@ void web_config_start(esp_netif_t *netif, web_config_forget_cb_t on_forget) {
 
     static const httpd_uri_t routes[] = {
         { .uri = "/",           .method = HTTP_GET,  .handler = handler_root       },
-        { .uri = "/api/fader",  .method = HTTP_GET,  .handler = handler_api_fader  },
+        { .uri = "/api/fader",     .method = HTTP_GET,  .handler = handler_api_fader     },
+        { .uri = "/api/fader-set", .method = HTTP_POST, .handler = handler_api_fader_set },
+        { .uri = "/api/press",     .method = HTTP_POST, .handler = handler_api_press     },
         { .uri = "/settings",   .method = HTTP_POST, .handler = handler_settings   },
         { .uri = "/forget",     .method = HTTP_POST, .handler = handler_forget     },
     };

@@ -7,7 +7,7 @@
   "idf.port": "/dev/tty.usbmodem101",
   "idf.currentSetup": "/Users/djgagnon/.espressif/v6.0.1/esp-idf",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32c6"
+    "IDF_TARGET": "esp32c5"
   },
   "clangd.path": "/Users/djgagnon/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
   "clangd.arguments": [
