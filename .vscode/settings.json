@@ -4,10 +4,10 @@
   "idf.openOcdConfigs": [
     "board/esp32c6-builtin.cfg"
   ],
-  "idf.port": "/dev/tty.usbmodem101",
+  "idf.port": "/dev/tty.usbserial-10",
   "idf.currentSetup": "/Users/djgagnon/.espressif/v6.0.1/esp-idf",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32c5"
+    "IDF_TARGET": "esp32c6"
   },
   "clangd.path": "/Users/djgagnon/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
   "clangd.arguments": [
@@ -15,5 +15,5 @@
     "--query-driver=**",
     "--compile-commands-dir=/Users/djgagnon/development/OSC-Lighting-Controller/build"
   ],
-  "idf.flashType": "JTAG"
+  "idf.flashType": "UART"
 }

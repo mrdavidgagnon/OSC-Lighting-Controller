@@ -197,9 +197,9 @@ static const char HTML_C[] =
         "arr.forEach(function(d,i){"
           "var st=sts[i];"
           "var ss=document.getElementById('ss-'+i);"
-          "if(ss)ss.style.background=d.bc||'#222';"
+          "if(ss)ss.style.background=d.fc||'#222';"
           "var lbl=document.getElementById('sl-'+i);"
-          "if(lbl){lbl.textContent=d.n||'\xe2\x80\x94';lbl.style.color=d.tc||'#fff';}"
+          "if(lbl)lbl.textContent=d.n||'\xe2\x80\x94';"
           "if(!st.dragging&&d.ok&&d.v!==st.oscLast){"
             "st.oscLast=d.v;"
             "var ff=document.getElementById('ff-'+i);"
@@ -366,14 +366,11 @@ static esp_err_t handler_api_fader(httpd_req_t *req) {
         const onyx_fader_cfg_t *f = &onyx_faders[i];
         float value = 0.0f;
         char  name[64]     = "";
-        char  btn_col[16]  = "";
-        char  btn_tcol[16] = "";
+        char  fdr_col[16]  = "";
         onyx_button_led_t led1 = {}, led2 = {}, led3 = {};
 
-        bool valid = onyx_get_fader(f->fader, &value, NULL, 0);
+        bool valid = onyx_get_fader(f->fader, &value, fdr_col, sizeof(fdr_col));
         onyx_get_button_text(f->button, name, sizeof(name));
-        onyx_get_button_color(f->button, btn_col, sizeof(btn_col));
-        onyx_get_button_text_color(f->button, btn_tcol, sizeof(btn_tcol));
         onyx_get_button_led(f->led1, &led1);
         onyx_get_button_led(f->led2, &led2);
         onyx_get_button_led(f->led3, &led3);
@@ -384,14 +381,13 @@ static esp_err_t handler_api_fader(httpd_req_t *req) {
         char json[380];
         snprintf(json, sizeof(json),
             "%s{\"ok\":%s,\"v\":%.4f,\"n\":\"%s\","
-            "\"bc\":\"%s\",\"tc\":\"%s\","
+            "\"fc\":\"%s\","
             "\"b1\":%d,\"b1c\":\"%s\",\"b1b\":%d,"
             "\"b2\":%d,\"b2c\":\"%s\",\"b2b\":%d,"
             "\"b3\":%d,\"b3c\":\"%s\"}",
             i > 0 ? "," : "",
             valid ? "true" : "false", (double)value, safe_name,
-            btn_col[0]  ? btn_col  : "#222",
-            btn_tcol[0] ? btn_tcol : "#fff",
+            fdr_col[0]  ? fdr_col  : "#222",
             led1.on, led1.color[0] ? led1.color : "#111", led1.blink,
             led2.on, led2.color[0] ? led2.color : "#111", led2.blink,
             led3.on, led3.color[0] ? led3.color : "#111");
