@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_netif.h"
@@ -117,10 +118,16 @@ static const char HTML_A[] =
     ".fdr-fill{position:absolute;bottom:0;left:0;right:0;"
     "background:rgba(255,255,255,.35);border-radius:3px;"
     "height:0%;transition:height .2s ease}"
+    "#osc-log{height:420px;overflow-y:auto;background:#0a0a1a;border-radius:4px;"
+    "padding:.5rem;font-family:monospace;font-size:.75rem;color:#4f8;line-height:1.5}"
+    "#osc-log>div{word-break:break-all;padding:.1rem 0;"
+    "border-bottom:1px solid rgba(255,255,255,.04)}"
+    ".osc-hdr{display:flex;justify-content:flex-end;margin-bottom:.5rem}"
     "</style></head><body><div class=\"card\">"
     "<div class=\"tabs\">"
     "<button class=\"tab active\" onclick=\"show('net',this)\">Network</button>"
     "<button class=\"tab\" onclick=\"show('mon',this)\">Monitor</button>"
+    "<button class=\"tab\" onclick=\"show('osc',this)\">OSC Monitor</button>"
     "<button class=\"tab\" onclick=\"show('cfg',this)\">Settings</button>"
     "</div>"
     "<div id=\"p-net\" class=\"panel active\">";
@@ -131,13 +138,44 @@ static const char HTML_B[] =
     "<div id=\"p-mon\" class=\"panel\">"
     "<div class=\"strip-row\" id=\"strip-row\"></div>"
     "</div>"
+    "<div id=\"p-osc\" class=\"panel\">"
+    "<div class=\"osc-hdr\">"
+    "<button class=\"danger\" style=\"width:auto;padding:.4rem 1rem\""
+    " onclick=\"clearOsc()\">Clear</button>"
+    "</div>"
+    "<div id=\"osc-log\"></div>"
+    "</div>"
     "<div id=\"p-cfg\" class=\"panel\">";
 
 /* FOOT: end settings panel → card → JS → body/html */
 static const char HTML_C[] =
     "</div></div>"
     "<script>"
-    "var T=null;"
+    "var T=null,OT=null,oscSince=0;"
+    "var _dc=document.createElement('canvas');"
+    "_dc.width=_dc.height=1;"
+    "var _dx=_dc.getContext('2d');"
+    "function dim(c){"
+      "_dx.fillStyle='#000';"
+      "_dx.fillStyle=c;"
+      "_dx.fillRect(0,0,1,1);"
+      "var d=_dx.getImageData(0,0,1,1).data;"
+      "return'rgb('+(d[0]>>1)+','+(d[1]>>1)+','+(d[2]>>1)+')';}"
+    "function pollOsc(){"
+      "fetch('/api/osc-log?since='+oscSince).then(function(r){return r.json();})"
+      ".then(function(arr){"
+        "if(!arr.length)return;"
+        "var log=document.getElementById('osc-log');"
+        "arr.forEach(function(e){"
+          "if(e.seq>oscSince)oscSince=e.seq;"
+          "var d=document.createElement('div');"
+          "d.textContent='['+e.seq+'] '+e.addr+'  '+e.t+'  '+e.v;"
+          "log.appendChild(d);"
+        "});"
+        "log.scrollTop=log.scrollHeight;"
+      "}).catch(function(){});}"
+    "function clearOsc(){"
+      "document.getElementById('osc-log').innerHTML='';}"
     "var FDRS=["
       "{fi:4203,bi:4204,l1:4201,l2:4202,l3:4205},"
       "{fi:4213,bi:4214,l1:4211,l2:4212,l3:4215},"
@@ -188,8 +226,9 @@ static const char HTML_C[] =
       "document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});"
       "document.getElementById('p-'+id).classList.add('active');"
       "btn.classList.add('active');"
-      "if(id==='mon'){poll();T=setInterval(poll,300);}"
-      "else if(T){clearInterval(T);T=null;}"
+      "if(id==='mon'){poll();T=setInterval(poll,300);if(OT){clearInterval(OT);OT=null;}}"
+      "else if(id==='osc'){pollOsc();OT=setInterval(pollOsc,500);if(T){clearInterval(T);T=null;}}"
+      "else{if(T){clearInterval(T);T=null;}if(OT){clearInterval(OT);OT=null;}}"
     "}"
     "function poll(){"
       "fetch('/api/fader').then(function(r){return r.json();})"
@@ -197,7 +236,7 @@ static const char HTML_C[] =
         "arr.forEach(function(d,i){"
           "var st=sts[i];"
           "var ss=document.getElementById('ss-'+i);"
-          "if(ss)ss.style.background=d.fc||'#222';"
+          "if(ss)ss.style.background=dim(d.fc||'#222');"
           "var lbl=document.getElementById('sl-'+i);"
           "if(lbl)lbl.textContent=d.n||'\xe2\x80\x94';"
           "if(!st.dragging&&d.ok&&d.v!==st.oscLast){"
@@ -455,6 +494,37 @@ static esp_err_t handler_settings(httpd_req_t *req) {
     return ret;
 }
 
+static esp_err_t handler_api_osc_log(httpd_req_t *req) {
+    char query[32] = {};
+    char since_str[16] = {};
+    uint32_t since = 0;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+        if (httpd_query_key_value(query, "since", since_str, sizeof(since_str)) == ESP_OK)
+            since = (uint32_t)strtoul(since_str, NULL, 10);
+
+    onyx_log_entry_t entries[32];
+    int n = onyx_get_osc_log(since, entries, 32);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr_chunk(req, "[");
+    for (int i = 0; i < n; i++) {
+        char addr_esc[130] = {}, val_esc[68] = {};
+        json_esc(entries[i].addr, addr_esc, sizeof(addr_esc));
+        json_esc(entries[i].val,  val_esc,  sizeof(val_esc));
+        char line[280];
+        snprintf(line, sizeof(line),
+            "%s{\"seq\":%" PRIu32 ",\"addr\":\"%s\",\"t\":\"%c\",\"v\":\"%s\"}",
+            i > 0 ? "," : "",
+            entries[i].seq,
+            addr_esc,
+            entries[i].types[0] ? entries[i].types[0] : '?',
+            val_esc);
+        httpd_resp_sendstr_chunk(req, line);
+    }
+    httpd_resp_sendstr_chunk(req, "]");
+    return httpd_resp_sendstr_chunk(req, NULL);
+}
+
 static esp_err_t handler_forget(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
     esp_err_t ret = httpd_resp_send(req, HTML_FORGOTTEN, HTTPD_RESP_USE_STRLEN);
@@ -481,6 +551,7 @@ void web_config_start(esp_netif_t *netif, web_config_forget_cb_t on_forget) {
     static const httpd_uri_t routes[] = {
         { .uri = "/",           .method = HTTP_GET,  .handler = handler_root       },
         { .uri = "/api/fader",     .method = HTTP_GET,  .handler = handler_api_fader     },
+        { .uri = "/api/osc-log",   .method = HTTP_GET,  .handler = handler_api_osc_log   },
         { .uri = "/api/fader-set", .method = HTTP_POST, .handler = handler_api_fader_set },
         { .uri = "/api/press",     .method = HTTP_POST, .handler = handler_api_press     },
         { .uri = "/settings",   .method = HTTP_POST, .handler = handler_settings   },

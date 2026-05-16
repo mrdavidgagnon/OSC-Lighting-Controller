@@ -44,6 +44,19 @@ bool onyx_get_button_text(int id, char *text, size_t text_len);
 bool onyx_get_button_color(int id, char *color, size_t color_len);
 bool onyx_get_button_text_color(int id, char *color, size_t color_len);
 
+/* OSC message log — ring buffer of last ONYX_LOG_SIZE messages */
+#define ONYX_LOG_SIZE 128
+
+typedef struct {
+    uint32_t seq;
+    char     addr[64];
+    char     types[8];
+    char     val[32];   /* stringified first argument */
+} onyx_log_entry_t;
+
+/* Returns up to max_out entries with seq > since; entries are in arrival order. */
+int onyx_get_osc_log(uint32_t since, onyx_log_entry_t *out, int max_out);
+
 /* NVS-backed settings */
 uint16_t onyx_load_port(void);
 uint16_t onyx_load_server_port(void);
