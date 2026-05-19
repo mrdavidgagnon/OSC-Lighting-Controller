@@ -1,10 +1,12 @@
 #include "ads1115.h"
 #include "i2c_bus.h"
 #include "onyx.h"
+#include "oled_display.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <math.h>
 
 static const char *TAG = "ads1115";
 
@@ -68,27 +70,23 @@ static void cal_save(void) {
     nvs_close(nvs);
 }
 
-/* Map a raw ADC reading to 0–255 using stored calibration.
-   Falls back to a linear 0–32767→0–255 map when uncalibrated.
-   A 2% dead zone at both ends clamps to exactly 0 or 255. */
-static int apply_cal(int ch, int raw) {
-    if (!s_cal_valid) {
-        int v = (int)(raw * 255L / 32767);
-        return v > 255 ? 255 : v;
-    }
-    int mn = s_cal_min[ch];
-    int mx = s_cal_max[ch];
-    int range = mx - mn;
-    if (range < 10) return 0;
+/* Map a smoothed (float) raw reading to a float 0–255 output.
+   Falls back to linear when uncalibrated. 2% dead zone at each end. */
+static float apply_cal_f(int ch, float raw) {
+    if (!s_cal_valid)
+        return raw * 255.0f / 32767.0f;
 
-    int dead = range / 50;   /* 2% of full range */
-    if (raw <= mn + dead) return 0;
-    if (raw >= mx - dead) return 255;
+    float mn    = (float)s_cal_min[ch];
+    float mx    = (float)s_cal_max[ch];
+    float range = mx - mn;
+    if (range < 10.0f) return 0.0f;
 
-    int adj = raw - (mn + dead);
-    int adj_range = range - 2 * dead;
-    int val = (int)((long)adj * 255L / adj_range);
-    return val > 255 ? 255 : (val < 0 ? 0 : val);
+    float dead = range * 0.02f;
+    if (raw <= mn + dead) return 0.0f;
+    if (raw >= mx - dead) return 255.0f;
+
+    float adj = raw - (mn + dead);
+    return adj * 255.0f / (range - 2.0f * dead);
 }
 
 /* ---------- I2C helpers -------------------------------------------------- */
@@ -123,7 +121,8 @@ static esp_err_t wait_ready(void) {
 /* ---------- polling task ------------------------------------------------- */
 
 static void ads_task(void *arg) {
-    int last_sent[4] = {-1, -1, -1, -1};
+    float last_sent_f[4] = {-999.0f, -999.0f, -999.0f, -999.0f};
+    int   last_disp       = -1;
 
     while (1) {
         for (int ch = 0; ch < 4; ch++) {
@@ -134,7 +133,7 @@ static void ads_task(void *arg) {
             if (read_conversion(&raw) != ESP_OK) continue;
 
             if (raw < 0) raw = 0;
-            s_last_raw[ch] = raw;  /* unsmoothed — used by calibration capture */
+            s_last_raw[ch] = raw;
 
             if (!s_ema_init[ch]) {
                 s_ema[ch]      = (float)raw;
@@ -143,11 +142,25 @@ static void ads_task(void *arg) {
                 s_ema[ch] += EMA_ALPHA * ((float)raw - s_ema[ch]);
             }
 
-            int val = apply_cal(ch, (int)(s_ema[ch] + 0.5f));
+            float out_f = apply_cal_f(ch, s_ema[ch]);
 
-            if (val != last_sent[ch]) {
+            /* Update OLED immediately for ch0 — no waiting for OSC round-trip. */
+            if (ch == 0) {
+                int disp_val = (int)(out_f + 0.5f);
+                if (disp_val < 0)   disp_val = 0;
+                if (disp_val > 255) disp_val = 255;
+                if (disp_val != last_disp) {
+                    oled_display_set_local_fader(disp_val);
+                    last_disp = disp_val;
+                }
+            }
+
+            if (fabsf(out_f - last_sent_f[ch]) >= 1.0f) {
+                last_sent_f[ch] = out_f;
+                int val = (int)(out_f + 0.5f);
+                if (val < 0)   val = 0;
+                if (val > 255) val = 255;
                 onyx_send_fader(s_fader_id[ch], (float)val);
-                last_sent[ch] = val;
                 char addr[32], val_str[16];
                 snprintf(addr,    sizeof(addr),    "/Mx/fader/%d", s_fader_id[ch]);
                 snprintf(val_str, sizeof(val_str), "%d", val);
