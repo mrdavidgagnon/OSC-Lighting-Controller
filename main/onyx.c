@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 
@@ -240,6 +241,18 @@ int onyx_get_osc_log(uint32_t since, onyx_log_entry_t *out, int max_out) {
     return count;
 }
 
+void onyx_log_event(const char *addr, char type, const char *val) {
+    if (!s_log_mutex) return;
+    xSemaphoreTake(s_log_mutex, portMAX_DELAY);
+    onyx_log_entry_t *e = &s_log[s_log_next % ONYX_LOG_SIZE];
+    e->seq     = ++s_log_next;
+    e->types[0] = type;
+    e->types[1] = '\0';
+    strlcpy(e->addr, addr,       sizeof(e->addr));
+    strlcpy(e->val,  val ? val : "", sizeof(e->val));
+    xSemaphoreGive(s_log_mutex);
+}
+
 /* ---------- NVS settings ------------------------------------------------- */
 
 uint16_t onyx_load_port(void) {
@@ -375,9 +388,17 @@ static void dispatch(const char *addr, osc_msg_t *msg) {
     }
 }
 
-/* ---------- UDP listener ------------------------------------------------- */
+/* ---------- queue-based UDP receiver ------------------------------------- */
 
-static void onyx_task(void *arg) {
+typedef struct {
+    uint8_t data[1024];
+    int     len;
+} osc_pkt_t;
+
+static QueueHandle_t s_pkt_queue;
+
+/* High-priority task: recv() → queue only, zero parsing */
+static void onyx_rx_task(void *arg) {
     uint16_t port = (uint16_t)(uintptr_t)arg;
 
     struct sockaddr_in addr = {
@@ -386,21 +407,51 @@ static void onyx_task(void *arg) {
         .sin_port        = htons(port),
     };
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) { ESP_LOGE(TAG, "socket() failed"); vTaskDelete(NULL); return; }
+    if (sock < 0) { ESP_LOGE(TAG, "rx: socket() failed"); vTaskDelete(NULL); return; }
+
+    int rcvbuf = 16384;
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        ESP_LOGE(TAG, "bind() failed on port %u", port);
+        ESP_LOGE(TAG, "rx: bind() failed on port %u", port);
         close(sock); vTaskDelete(NULL); return;
     }
     ESP_LOGI(TAG, "listening for OSC on UDP port %u", port);
 
-    uint8_t buf[1024];
+    osc_pkt_t pkt;
+    uint32_t   drop_count    = 0;
+    TickType_t drop_last_log = 0;
     while (1) {
-        int len = recv(sock, buf, sizeof(buf), 0);
+        int len = recv(sock, pkt.data, sizeof(pkt.data), 0);
         if (len <= 0) continue;
+        pkt.len = len;
+        if (xQueueSend(s_pkt_queue, &pkt, 0) != pdTRUE) {
+            drop_count++;
+            TickType_t now = xTaskGetTickCount();
+            if (now - drop_last_log > pdMS_TO_TICKS(1000)) {
+                ESP_LOGW(TAG, "rx: %" PRIu32 " packet(s) dropped — dispatch too slow", drop_count);
+                char val_str[16];
+                snprintf(val_str, sizeof(val_str), "%" PRIu32, drop_count);
+                onyx_log_event("/sys/rx/drop", 'i', val_str);
+                drop_count    = 0;
+                drop_last_log = now;
+            }
+        }
+    }
 
-        if (osc_is_bundle(buf, len)) {
+    close(sock);
+    vTaskDelete(NULL);
+}
+
+/* Normal-priority task: dequeue → parse → dispatch */
+static void onyx_dispatch_task(void *arg) {
+    osc_pkt_t pkt;
+    while (1) {
+        if (xQueueReceive(s_pkt_queue, &pkt, portMAX_DELAY) != pdTRUE) continue;
+
+        if (osc_is_bundle(pkt.data, pkt.len)) {
             osc_bundle_iter_t it;
-            osc_bundle_init(buf, len, &it);
+            osc_bundle_init(pkt.data, pkt.len, &it);
             const uint8_t *mbuf;
             int mlen;
             while (osc_bundle_next(&it, &mbuf, &mlen)) {
@@ -412,15 +463,15 @@ static void onyx_task(void *arg) {
             }
         } else {
             osc_msg_t msg;
-            if (!osc_parse(buf, len, &msg)) { ESP_LOGW(TAG, "invalid OSC packet"); continue; }
+            if (!osc_parse(pkt.data, pkt.len, &msg)) {
+                ESP_LOGW(TAG, "invalid OSC packet");
+                continue;
+            }
             ESP_LOGD(TAG, "OSC %s  types=%s", msg.address, msg.types);
             osc_log_push(msg.address, &msg);
             dispatch(msg.address, &msg);
         }
     }
-
-    close(sock);
-    vTaskDelete(NULL);
 }
 
 /* ---------- OSC send ----------------------------------------------------- */
@@ -460,6 +511,36 @@ void onyx_send_fader(int id, float value) {
     sendto(sock, buf, pos, 0, (struct sockaddr *)&dest, sizeof(dest));
     close(sock);
     ESP_LOGD(TAG, "OSC /Mx/fader/%d = %.2f → %s:%u", id, (double)value, onyx_ip, port);
+}
+
+void onyx_send_sync(void) {
+    char onyx_ip[32] = {};
+    onyx_load_onyx_ip(onyx_ip, sizeof(onyx_ip));
+    if (!onyx_ip[0]) { ESP_LOGW(TAG, "sync: no ONYX IP configured"); return; }
+    uint16_t port = onyx_load_server_port();
+
+    const char *addr = "/Mx/configuration/deviceSpace/refresh";
+    uint8_t buf[64] = {};
+    int pos = 0;
+
+    int alen = (int)strlen(addr) + 1;
+    memcpy(buf, addr, alen);
+    pos = (alen + 3) & ~3;
+
+    buf[pos++] = ','; buf[pos++] = 'i'; buf[pos++] = '\0';
+    while (pos & 3) buf[pos++] = '\0';
+
+    buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 0; buf[pos++] = 1; /* int32 = 1 */
+
+    struct sockaddr_in dest = { .sin_family = AF_INET, .sin_port = htons(port) };
+    if (inet_pton(AF_INET, onyx_ip, &dest.sin_addr) <= 0) {
+        ESP_LOGW(TAG, "sync: invalid ONYX IP '%s'", onyx_ip); return;
+    }
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) { ESP_LOGE(TAG, "sync: socket() failed"); return; }
+    sendto(sock, buf, pos, 0, (struct sockaddr *)&dest, sizeof(dest));
+    close(sock);
+    ESP_LOGI(TAG, "sync sent → %s:%u", onyx_ip, port);
 }
 
 void onyx_send_button_press(int id, int val) {
@@ -544,7 +625,9 @@ void onyx_start(onyx_fader_cb_t on_fader,
     s_text_cb   = on_button_text;
     s_color_cb  = on_fader_color;
     s_log_mutex = xSemaphoreCreateMutex();
+    s_pkt_queue = xQueueCreate(32, sizeof(osc_pkt_t));
     uint16_t port = onyx_load_port();
     ESP_LOGI(TAG, "starting OSC listener on port %u", port);
-    xTaskCreate(onyx_task, "onyx", 4096, (void *)(uintptr_t)port, 5, NULL);
+    xTaskCreate(onyx_rx_task,       "onyx_rx",  4096, (void *)(uintptr_t)port, 12, NULL);
+    xTaskCreate(onyx_dispatch_task, "onyx_dis", 4096, NULL,  7, NULL);
 }

@@ -13,6 +13,9 @@
 #define WIFI_NVS_KEY_SSID  "ssid"
 #define WIFI_NVS_KEY_PASS  "pass"
 
+typedef void (*wifi_connected_cb_t)(void);
+void wifi_manager_on_connected(wifi_connected_cb_t cb);
+
 void wifi_manager_init(void);
 bool wifi_manager_load_credentials(char *ssid, size_t ssid_len,
                                    char *password, size_t pass_len);
