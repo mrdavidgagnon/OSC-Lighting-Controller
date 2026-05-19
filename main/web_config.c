@@ -300,6 +300,12 @@ static const char HTML_C[] =
     "</script>"
     "</body></html>";
 
+/* Build description — values are baked in at compile time */
+static const char HTML_BUILD_INFO[] =
+    "<p class=\"hint\" style=\"margin-top:1rem;border-top:1px solid #0f3460;padding-top:.75rem\">"
+    "Build: <b>" BUILD_GIT_HASH "</b> \xe2\x80\x94 " __DATE__ " " __TIME__
+    "</p>";
+
 static const char HTML_FORGOTTEN[] =
     "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Forgotten</title>"
     "<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;"
@@ -393,6 +399,7 @@ static esp_err_t handler_root(httpd_req_t *req) {
         "</form>",
         port, onyx_ip, server_port, ip_s, port, onyx_ip[0] ? onyx_ip : "ONYX-IP", server_port);
     httpd_resp_sendstr_chunk(req, cfg);
+    httpd_resp_sendstr_chunk(req, HTML_BUILD_INFO);
 
     httpd_resp_sendstr_chunk(req, HTML_C);
     return httpd_resp_sendstr_chunk(req, NULL);
