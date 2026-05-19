@@ -7,7 +7,7 @@
 #define WIFI_AP_MAX_CONN   4
 #define WIFI_AP_IP         "192.168.4.1"
 
-#define LED_GPIO           2
+#define LED_GPIO           4
 
 #define WIFI_NVS_NAMESPACE "wifi_cfg"
 #define WIFI_NVS_KEY_SSID  "ssid"
