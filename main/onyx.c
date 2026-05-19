@@ -7,6 +7,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 
@@ -199,6 +200,46 @@ bool onyx_get_button_led(int id, onyx_button_led_t *out) {
     return false;
 }
 
+/* ---------- OSC message ring buffer -------------------------------------- */
+
+static onyx_log_entry_t  s_log[ONYX_LOG_SIZE];
+static uint32_t          s_log_next;   /* total messages written (not masked) */
+static SemaphoreHandle_t s_log_mutex;
+
+static void osc_log_push(const char *addr, const osc_msg_t *msg) {
+    if (!s_log_mutex) return;
+    xSemaphoreTake(s_log_mutex, portMAX_DELAY);
+    onyx_log_entry_t *e = &s_log[s_log_next % ONYX_LOG_SIZE];
+    e->seq = ++s_log_next;
+    strlcpy(e->addr,  addr,       sizeof(e->addr));
+    strlcpy(e->types, msg->types, sizeof(e->types));
+    e->val[0] = '\0';
+    if      (msg->types[0] == 'f')
+        snprintf(e->val, sizeof(e->val), "%.2f", (double)osc_float(msg, 0));
+    else if (msg->types[0] == 'i' || msg->types[0] == 'r')
+        snprintf(e->val, sizeof(e->val), "%" PRId32, osc_int(msg, 0));
+    else if (msg->types[0] == 's' || msg->types[0] == 'S') {
+        const char *s = osc_string(msg, 0);
+        if (s) strlcpy(e->val, s, sizeof(e->val));
+    }
+    xSemaphoreGive(s_log_mutex);
+}
+
+int onyx_get_osc_log(uint32_t since, onyx_log_entry_t *out, int max_out) {
+    if (!s_log_mutex) return 0;
+    xSemaphoreTake(s_log_mutex, portMAX_DELAY);
+    uint32_t total  = s_log_next;
+    uint32_t oldest = (total > ONYX_LOG_SIZE) ? total - ONYX_LOG_SIZE : 0;
+    int count = 0;
+    for (uint32_t i = oldest; i < total && count < max_out; i++) {
+        onyx_log_entry_t *e = &s_log[i % ONYX_LOG_SIZE];
+        if (e->seq > since)
+            out[count++] = *e;
+    }
+    xSemaphoreGive(s_log_mutex);
+    return count;
+}
+
 /* ---------- NVS settings ------------------------------------------------- */
 
 uint16_t onyx_load_port(void) {
@@ -366,12 +407,14 @@ static void onyx_task(void *arg) {
                 osc_msg_t msg;
                 if (!osc_parse(mbuf, mlen, &msg)) continue;
                 ESP_LOGD(TAG, "OSC(bundle) %s  types=%s", msg.address, msg.types);
+                osc_log_push(msg.address, &msg);
                 dispatch(msg.address, &msg);
             }
         } else {
             osc_msg_t msg;
             if (!osc_parse(buf, len, &msg)) { ESP_LOGW(TAG, "invalid OSC packet"); continue; }
             ESP_LOGD(TAG, "OSC %s  types=%s", msg.address, msg.types);
+            osc_log_push(msg.address, &msg);
             dispatch(msg.address, &msg);
         }
     }
@@ -497,9 +540,10 @@ const onyx_fader_cfg_t onyx_faders[ONYX_NUM_FADERS] = {
 void onyx_start(onyx_fader_cb_t on_fader,
                 onyx_text_cb_t  on_button_text,
                 onyx_color_cb_t on_fader_color) {
-    s_fader_cb = on_fader;
-    s_text_cb  = on_button_text;
-    s_color_cb = on_fader_color;
+    s_fader_cb  = on_fader;
+    s_text_cb   = on_button_text;
+    s_color_cb  = on_fader_color;
+    s_log_mutex = xSemaphoreCreateMutex();
     uint16_t port = onyx_load_port();
     ESP_LOGI(TAG, "starting OSC listener on port %u", port);
     xTaskCreate(onyx_task, "onyx", 4096, (void *)(uintptr_t)port, 5, NULL);

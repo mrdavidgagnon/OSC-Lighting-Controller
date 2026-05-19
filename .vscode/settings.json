@@ -4,10 +4,9 @@
   "idf.openOcdConfigs": [
     "board/esp32c5-builtin.cfg"
   ],
-  "idf.port": "/dev/tty.usbmodem14201",
-  "idf.currentSetup": "/Users/djgagnon/.espressif/v6.0.1/esp-idf",
+  "idf.port": "/dev/tty.usbserial-110",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32c5"
+    "IDF_TARGET": "esp32c6"
   },
   "clangd.path": "/Users/djgagnon/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
   "clangd.arguments": [
