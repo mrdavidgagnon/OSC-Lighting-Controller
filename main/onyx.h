@@ -57,6 +57,9 @@ typedef struct {
 /* Returns up to max_out entries with seq > since; entries are in arrival order. */
 int onyx_get_osc_log(uint32_t since, onyx_log_entry_t *out, int max_out);
 
+/* Push an arbitrary event into the log (e.g. outgoing button presses). */
+void onyx_log_event(const char *addr, char type, const char *val);
+
 /* NVS-backed settings */
 uint16_t onyx_load_port(void);
 uint16_t onyx_load_server_port(void);
@@ -68,3 +71,6 @@ void onyx_send_button_press(int id, int val);
 
 /* Send an OSC fader value to the ONYX console (value in ONYX native range 0–255) */
 void onyx_send_fader(int id, float value);
+
+/* Request a full state dump from ONYX */
+void onyx_send_sync(void);

@@ -94,7 +94,10 @@ void wifi_manager_save_credentials(const char *ssid, const char *password) {
 
 #define STA_MAX_RETRIES 5
 
-static int s_retry_count = 0;
+static int                s_retry_count = 0;
+static wifi_connected_cb_t s_connected_cb;
+
+void wifi_manager_on_connected(wifi_connected_cb_t cb) { s_connected_cb = cb; }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data) {
@@ -118,6 +121,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         led_stop();
         ip_event_got_ip_t *event = data;
         ESP_LOGI(TAG, "got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        if (s_connected_cb) s_connected_cb();
     }
 }
 

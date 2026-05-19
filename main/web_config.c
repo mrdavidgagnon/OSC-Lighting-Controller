@@ -1,5 +1,6 @@
 #include "web_config.h"
 #include "onyx.h"
+#include "ads1115.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -126,8 +127,8 @@ static const char HTML_A[] =
     "</style></head><body><div class=\"card\">"
     "<div class=\"tabs\">"
     "<button class=\"tab active\" onclick=\"show('net',this)\">Network</button>"
-    "<button class=\"tab\" onclick=\"show('mon',this)\">Monitor</button>"
-    "<button class=\"tab\" onclick=\"show('osc',this)\">OSC Monitor</button>"
+    "<button class=\"tab\" onclick=\"show('mon',this)\">Virtual Console</button>"
+    "<button class=\"tab\" onclick=\"show('osc',this)\">Event Monitor</button>"
     "<button class=\"tab\" onclick=\"show('cfg',this)\">Settings</button>"
     "</div>"
     "<div id=\"p-net\" class=\"panel active\">";
@@ -176,6 +177,8 @@ static const char HTML_C[] =
       "}).catch(function(){});}"
     "function clearOsc(){"
       "document.getElementById('osc-log').innerHTML='';}"
+    "function syncOnyx(){"
+      "fetch('/api/sync',{method:'POST'}).catch(function(){});}"
     "var FDRS=["
       "{fi:4203,bi:4204,l1:4201,l2:4202,l3:4205},"
       "{fi:4213,bi:4214,l1:4211,l2:4212,l3:4215},"
@@ -297,8 +300,51 @@ static const char HTML_C[] =
         "document.getElementById('ff-'+i),"
         "sts[i],f.fi);"
     "});"
+    "var calLo=null;"
+    "function calLow(){"
+      "fetch('/api/cal/low',{method:'POST'}).then(function(r){return r.json();})"
+      ".then(function(d){"
+        "if(!d.ok)return;"
+        "calLo=d.raw;"
+        "document.getElementById('cal-info').textContent='Low: '+d.raw.join(', ');"
+        "document.getElementById('cal-s1').style.display='none';"
+        "document.getElementById('cal-s2').style.display='block';"
+      "}).catch(function(){});}"
+    "function calHigh(){"
+      "fetch('/api/cal/high',{method:'POST'}).then(function(r){return r.json();})"
+      ".then(function(d){"
+        "if(!d.ok)return;"
+        "document.getElementById('cal-info').textContent="
+          "'Lo: '+(calLo?calLo.join(','):'?')+'  Hi: '+d.raw.join(',');"
+        "document.getElementById('cal-s2').style.display='none';"
+        "document.getElementById('cal-ok').style.display='block';"
+      "}).catch(function(){});}"
+    "function calReset(){"
+      "document.getElementById('cal-s1').style.display='block';"
+      "document.getElementById('cal-s2').style.display='none';"
+      "document.getElementById('cal-ok').style.display='none';"
+      "document.getElementById('cal-info').textContent='';"
+      "calLo=null;}"
     "</script>"
     "</body></html>";
+
+/* Calibration section appended inside the settings panel */
+static const char HTML_CAL[] =
+    "<hr style=\"border-color:#0f3460;margin:1.5rem 0\">"
+    "<p style=\"font-size:.85rem;color:#ccc;margin-bottom:.75rem\">Fader Calibration</p>"
+    "<div id=\"cal-info\" class=\"hint\"></div>"
+    "<div id=\"cal-s1\">"
+    "<p class=\"hint\">Move all faders to their <b>lowest</b> position, then click below.</p>"
+    "<button class=\"primary\" type=\"button\" onclick=\"calLow()\">&#x2193; Set Low Points</button>"
+    "</div>"
+    "<div id=\"cal-s2\" style=\"display:none\">"
+    "<p class=\"hint\">Now move all faders to their <b>highest</b> position, then click below.</p>"
+    "<button class=\"primary\" type=\"button\" onclick=\"calHigh()\">&#x2191; Set High Points</button>"
+    "</div>"
+    "<div id=\"cal-ok\" style=\"display:none\">"
+    "<p class=\"hint\" style=\"color:#4caf50\">&#x2713; Calibration saved.</p>"
+    "<button class=\"primary\" type=\"button\" onclick=\"calReset()\">&#x21BA; Recalibrate</button>"
+    "</div>";
 
 static const char HTML_FORGOTTEN[] =
     "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Forgotten</title>"
@@ -390,9 +436,12 @@ static esp_err_t handler_root(httpd_req_t *req) {
         "ESP32 \xe2\x86\x92 ONYX: sends to <b>%s : %u</b>"
         "</p>"
         "<button class=\"primary\" type=\"submit\">Save &amp; Restart</button>"
-        "</form>",
+        "</form>"
+        "<button class=\"primary\" style=\"margin-top:.75rem\""
+        " onclick=\"syncOnyx()\">&#x21BA; Sync from ONYX</button>",
         port, onyx_ip, server_port, ip_s, port, onyx_ip[0] ? onyx_ip : "ONYX-IP", server_port);
     httpd_resp_sendstr_chunk(req, cfg);
+    httpd_resp_sendstr_chunk(req, HTML_CAL);
 
     httpd_resp_sendstr_chunk(req, HTML_C);
     return httpd_resp_sendstr_chunk(req, NULL);
@@ -525,6 +574,32 @@ static esp_err_t handler_api_osc_log(httpd_req_t *req) {
     return httpd_resp_sendstr_chunk(req, NULL);
 }
 
+static esp_err_t handler_api_sync(httpd_req_t *req) {
+    onyx_send_sync();
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static esp_err_t handler_api_cal_low(httpd_req_t *req) {
+    int raw[4];
+    ads1115_cal_set_low(raw);
+    char json[80];
+    snprintf(json, sizeof(json), "{\"ok\":true,\"raw\":[%d,%d,%d,%d]}",
+             raw[0], raw[1], raw[2], raw[3]);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, json);
+}
+
+static esp_err_t handler_api_cal_high(httpd_req_t *req) {
+    int raw[4];
+    ads1115_cal_set_high(raw);
+    char json[80];
+    snprintf(json, sizeof(json), "{\"ok\":true,\"raw\":[%d,%d,%d,%d]}",
+             raw[0], raw[1], raw[2], raw[3]);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, json);
+}
+
 static esp_err_t handler_forget(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
     esp_err_t ret = httpd_resp_send(req, HTML_FORGOTTEN, HTTPD_RESP_USE_STRLEN);
@@ -540,7 +615,8 @@ void web_config_start(esp_netif_t *netif, web_config_forget_cb_t on_forget) {
 
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.stack_size      = 8192;
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 11;
+    config.lru_purge_enable = true;
 
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) != ESP_OK) {
@@ -554,6 +630,9 @@ void web_config_start(esp_netif_t *netif, web_config_forget_cb_t on_forget) {
         { .uri = "/api/osc-log",   .method = HTTP_GET,  .handler = handler_api_osc_log   },
         { .uri = "/api/fader-set", .method = HTTP_POST, .handler = handler_api_fader_set },
         { .uri = "/api/press",     .method = HTTP_POST, .handler = handler_api_press     },
+        { .uri = "/api/sync",      .method = HTTP_POST, .handler = handler_api_sync      },
+        { .uri = "/api/cal/low",   .method = HTTP_POST, .handler = handler_api_cal_low   },
+        { .uri = "/api/cal/high",  .method = HTTP_POST, .handler = handler_api_cal_high  },
         { .uri = "/settings",   .method = HTTP_POST, .handler = handler_settings   },
         { .uri = "/forget",     .method = HTTP_POST, .handler = handler_forget     },
     };
