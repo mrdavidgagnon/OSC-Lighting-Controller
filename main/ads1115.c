@@ -23,6 +23,12 @@ static int  s_cal_min[4];
 static int  s_cal_max[4];
 static bool s_cal_valid;
 
+/* EMA smoothing applied to raw ADC before calibration mapping.
+   α=0.3 → ~87 ms time constant at 32 effective SPS per channel. */
+#define EMA_ALPHA 0.3f
+static float s_ema[4];
+static bool  s_ema_init[4];
+
 static void cal_load(void) {
     nvs_handle_t nvs;
     if (nvs_open(ADS_NVS_NS, NVS_READONLY, &nvs) != ESP_OK) return;
@@ -128,9 +134,16 @@ static void ads_task(void *arg) {
             if (read_conversion(&raw) != ESP_OK) continue;
 
             if (raw < 0) raw = 0;
-            s_last_raw[ch] = raw;
+            s_last_raw[ch] = raw;  /* unsmoothed — used by calibration capture */
 
-            int val = apply_cal(ch, raw);
+            if (!s_ema_init[ch]) {
+                s_ema[ch]      = (float)raw;
+                s_ema_init[ch] = true;
+            } else {
+                s_ema[ch] += EMA_ALPHA * ((float)raw - s_ema[ch]);
+            }
+
+            int val = apply_cal(ch, (int)(s_ema[ch] + 0.5f));
 
             if (val != last_sent[ch]) {
                 onyx_send_fader(s_fader_id[ch], (float)val);

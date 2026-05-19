@@ -172,6 +172,38 @@ static void oled_draw_string(uint8_t page, const char *s)
     }
 }
 
+/* Expand each bit in a nibble to two bits: 0b0101 → 0b00110011 */
+static const uint8_t EXPAND[16] = {
+    0x00, 0x03, 0x0C, 0x0F,
+    0x30, 0x33, 0x3C, 0x3F,
+    0xC0, 0xC3, 0xCC, 0xCF,
+    0xF0, 0xF3, 0xFC, 0xFF,
+};
+
+/* 2x scaled character: 10px wide × 16px tall (2 pages).
+   Each original column is doubled; each row-bit is doubled across two pages. */
+static void oled_draw_char_2x(uint8_t page, uint8_t col, char c)
+{
+    if (c < 32 || c > 126) c = '?';
+    const uint8_t *g = FONT[(uint8_t)c - 32];
+    uint8_t p0[10], p1[10];
+    for (int i = 0; i < 5; i++) {
+        uint8_t lo = EXPAND[g[i] & 0x0F];       /* lower 4 rows → page 0 */
+        uint8_t hi = EXPAND[(g[i] >> 4) & 0x0F]; /* upper 4 rows → page 1 */
+        p0[i * 2] = p0[i * 2 + 1] = lo;
+        p1[i * 2] = p1[i * 2 + 1] = hi;
+    }
+    oled_set_pos(page,     col); oled_send(true, p0, 10);
+    oled_set_pos(page + 1, col); oled_send(true, p1, 10);
+}
+
+static void oled_draw_string_2x(uint8_t page, const char *s)
+{
+    uint8_t col = 0;
+    while (*s && col + 10 <= OLED_W)
+        oled_draw_char_2x(page, col, *s++), col += 10;
+}
+
 /* ---------- public API --------------------------------------------------- */
 
 void oled_display_init(void)
@@ -259,21 +291,15 @@ void oled_display_init(void)
 
 void oled_display_set_fader_name(const char *name)
 {
-    /* clear name rows */
+    oled_fill_page(2, 0x00);
     oled_fill_page(3, 0x00);
-    oled_fill_page(5, 0x00);
 
     if (!name || !*name) return;
 
-    size_t len = strlen(name);
-    if (len <= 21) {
-        oled_draw_string(3, name);
-    } else {
-        /* wrap at 21 chars */
-        char line[22] = {0};
-        strncpy(line, name, 21);
-        oled_draw_string(3, line);
-        oled_draw_string(5, name + 21);
-    }
+    char buf[13];
+    strncpy(buf, name, 12);
+    buf[12] = '\0';
+
+    oled_draw_string_2x(2, buf);
     ESP_LOGI(TAG, "name -> \"%s\"", name);
 }

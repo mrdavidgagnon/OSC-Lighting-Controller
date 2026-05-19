@@ -7,7 +7,6 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 #include "nvs.h"
-#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -20,33 +19,12 @@ static void do_forget(void) {
 }
 
 /* ---------- LED blink ---------------------------------------------------- */
+/* GPIO4 on the C5 DevKit v1 is a WS2812 RGB LED that requires the RMT
+   peripheral — simple gpio_set_level does not work.  Stubs until a
+   led_strip driver is added. */
 
-static TaskHandle_t s_led_task = NULL;
-
-static void led_blink_task(void *arg) {
-    gpio_reset_pin(LED_GPIO);
-    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
-    ESP_LOGI(TAG, "LED blink started on GPIO %d", LED_GPIO);
-    while (1) {
-        gpio_set_level(LED_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        gpio_set_level(LED_GPIO, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-}
-
-static void led_start(void) {
-    if (!s_led_task)
-        xTaskCreate(led_blink_task, "led_blink", 2048, NULL, 3, &s_led_task);
-}
-
-static void led_stop(void) {
-    if (s_led_task) {
-        vTaskDelete(s_led_task);
-        s_led_task = NULL;
-        gpio_set_level(LED_GPIO, 0);
-    }
-}
+static void led_start(void) { }
+static void led_stop(void)  { }
 
 void wifi_manager_init(void) {
     esp_err_t ret = nvs_flash_init();

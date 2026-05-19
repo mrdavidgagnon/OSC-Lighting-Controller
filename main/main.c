@@ -11,7 +11,7 @@
 static const char *TAG = "main";
 
 static void on_fader(int id, float value) {
-    ESP_LOGD(TAG, "fader %d = %.3f", id, value);
+    ESP_LOGI(TAG, "fader %d = %.3f", id, value);
 }
 
 static void on_button_text(int id, const char *text) {
