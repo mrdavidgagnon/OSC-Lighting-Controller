@@ -209,7 +209,7 @@ static SemaphoreHandle_t s_log_mutex;
 
 static void osc_log_push(const char *addr, const osc_msg_t *msg) {
     if (!s_log_mutex) return;
-    xSemaphoreTake(s_log_mutex, portMAX_DELAY);
+    if (xSemaphoreTake(s_log_mutex, 0) != pdTRUE) return;
     onyx_log_entry_t *e = &s_log[s_log_next % ONYX_LOG_SIZE];
     e->seq = ++s_log_next;
     strlcpy(e->addr,  addr,       sizeof(e->addr));
@@ -625,7 +625,7 @@ void onyx_start(onyx_fader_cb_t on_fader,
     s_text_cb   = on_button_text;
     s_color_cb  = on_fader_color;
     s_log_mutex = xSemaphoreCreateMutex();
-    s_pkt_queue = xQueueCreate(32, sizeof(osc_pkt_t));
+    s_pkt_queue = xQueueCreate(64, sizeof(osc_pkt_t));
     uint16_t port = onyx_load_port();
     ESP_LOGI(TAG, "starting OSC listener on port %u", port);
     xTaskCreate(onyx_rx_task,       "onyx_rx",  4096, (void *)(uintptr_t)port, 12, NULL);

@@ -1,4 +1,6 @@
 {
+  "cmake.configureOnOpen": false,
+  "cmake.autoSelectActiveFolder": false,
   "C_Cpp.intelliSenseEngine": "default",
   "idf.extensionActivationMode": "always",
   "idf.openOcdConfigs": [
@@ -14,5 +16,6 @@
     "--query-driver=**",
     "--compile-commands-dir=/Users/djgagnon/Development/OSC-Lighting-Controller/build"
   ],
-  "idf.flashType": "JTAG"
+  "idf.flashType": "JTAG",
+  "idf.currentSetup": "/Users/djgagnon/.espressif/v6.0.1/esp-idf"
 }
