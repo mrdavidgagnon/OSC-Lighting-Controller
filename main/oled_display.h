@@ -9,3 +9,4 @@
 
 void oled_display_init(void);
 void oled_display_set_fader_name(const char *name);
+void oled_display_set_local_fader(int val);  /* 0-255, updates immediately from ADC */

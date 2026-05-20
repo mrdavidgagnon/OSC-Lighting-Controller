@@ -7,6 +7,7 @@
 #include "oled_display.h"
 #include "i2c_scan.h"
 #include "esp_log.h"
+#include "mdns.h"
 
 static const char *TAG = "main";
 
@@ -32,6 +33,12 @@ void app_main(void) {
     char ssid[33], password[65];
     if (wifi_manager_load_credentials(ssid, sizeof(ssid), password, sizeof(password))) {
         wifi_manager_on_connected(onyx_send_sync);
+        char hostname[64];
+        onyx_load_hostname(hostname, sizeof(hostname));
+        mdns_init();
+        mdns_hostname_set(hostname);
+        mdns_instance_name_set("OSC Lighting Controller");
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
         wifi_manager_start_sta(ssid, password);
         onyx_start(on_fader, on_button_text, on_fader_color);
         i2c_bus_init();

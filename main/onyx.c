@@ -285,16 +285,28 @@ void onyx_load_onyx_ip(char *buf, size_t len) {
     }
 }
 
-void onyx_save_settings(uint16_t listen_port, uint16_t server_port, const char *onyx_ip) {
+void onyx_load_hostname(char *buf, size_t len) {
+    if (!buf || !len) return;
+    strlcpy(buf, ONYX_MDNS_HOSTNAME, len);
+    nvs_handle_t nvs;
+    if (nvs_open(ONYX_NVS_NS, NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_str(nvs, "hostname", buf, &len);
+        nvs_close(nvs);
+    }
+}
+
+void onyx_save_settings(uint16_t listen_port, uint16_t server_port,
+                         const char *onyx_ip, const char *hostname) {
     nvs_handle_t nvs;
     if (nvs_open(ONYX_NVS_NS, NVS_READWRITE, &nvs) != ESP_OK) return;
     nvs_set_u16(nvs, "port",     listen_port);
     nvs_set_u16(nvs, "srv_port", server_port);
-    if (onyx_ip) nvs_set_str(nvs, "onyx_ip", onyx_ip);
+    if (onyx_ip)  nvs_set_str(nvs, "onyx_ip",  onyx_ip);
+    if (hostname) nvs_set_str(nvs, "hostname", hostname);
     nvs_commit(nvs);
     nvs_close(nvs);
-    ESP_LOGI(TAG, "settings saved — listen %u  server %u  ONYX IP: %s",
-             listen_port, server_port, onyx_ip ? onyx_ip : "");
+    ESP_LOGI(TAG, "settings saved — listen %u  server %u  ONYX IP: %s  hostname: %s.local",
+             listen_port, server_port, onyx_ip ? onyx_ip : "", hostname ? hostname : "");
 }
 
 /* ---------- address dispatch --------------------------------------------- */

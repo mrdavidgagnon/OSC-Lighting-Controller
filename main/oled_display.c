@@ -132,7 +132,7 @@ static void oled_send(bool is_data, const uint8_t *buf, size_t len)
         .tx_buffer = buf,
         .user      = (void *)(uintptr_t)(is_data ? 1 : 0),
     };
-    esp_err_t err = spi_device_polling_transmit(s_spi, &t);
+    esp_err_t err = spi_device_transmit(s_spi, &t);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "SPI tx failed: %s", esp_err_to_name(err));
 }
@@ -302,4 +302,35 @@ void oled_display_set_fader_name(const char *name)
 
     oled_draw_string_2x(2, buf);
     ESP_LOGI(TAG, "name -> \"%s\"", name);
+}
+
+/* Draw a vertical fader track in pages 4-7 (bottom 32 px).
+   A 2-pixel-thick horizontal line marks the current position.
+   val=255 → line near top; val=0 → line near bottom. */
+void oled_display_set_local_fader(int val)
+{
+    if (!s_ok) return;
+    if (val < 0)   val = 0;
+    if (val > 255) val = 255;
+
+    /* Map 0-255 to row 1-29 within the 32-row zone (rows 0 and 31 are border).
+       2-px line, so start row 1 (val=255) … 28 (val=0). */
+    int line_row = 1 + (27 * (255 - val) / 255);
+
+    uint8_t buf[OLED_W];
+    for (int p = 0; p < 4; p++) {
+        /* Build the column byte for non-border columns this page. */
+        uint8_t col_byte = 0;
+        for (int bit = 0; bit < 8; bit++) {
+            int row = p * 8 + bit;
+            if (row == 0 || row == 31)                   col_byte |= (1 << bit); /* h-border */
+            if (row == line_row || row == line_row + 1)  col_byte |= (1 << bit); /* marker   */
+        }
+
+        for (int x = 0; x < OLED_W; x++)
+            buf[x] = (x == 0 || x == OLED_W - 1) ? 0xFF : col_byte;
+
+        oled_set_pos(4 + p, 0);
+        oled_send(true, buf, OLED_W);
+    }
 }

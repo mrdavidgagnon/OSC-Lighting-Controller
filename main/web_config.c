@@ -402,16 +402,19 @@ static esp_err_t handler_root(httpd_req_t *req) {
     uint16_t server_port = onyx_load_server_port();
     char onyx_ip[32] = {};
     onyx_load_onyx_ip(onyx_ip, sizeof(onyx_ip));
+    char hostname[64] = {};
+    onyx_load_hostname(hostname, sizeof(hostname));
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_sendstr_chunk(req, HTML_A);
 
     /* Dynamic: network panel */
-    char net[512];
+    char net[600];
     snprintf(net, sizeof(net),
         "<table>"
         "<tr><td>SSID</td><td>%s</td></tr>"
         "<tr><td>IP</td><td>%s</td></tr>"
+        "<tr><td>mDNS</td><td>%s.local</td></tr>"
         "<tr><td>Subnet</td><td>%s</td></tr>"
         "<tr><td>Gateway</td><td>%s</td></tr>"
         "<tr><td>DNS 1</td><td>%s</td></tr>"
@@ -421,13 +424,13 @@ static esp_err_t handler_root(httpd_req_t *req) {
         "<form method=\"POST\" action=\"/forget\">"
         "<button class=\"danger\" type=\"submit\">Forget Network</button>"
         "</form>",
-        (char *)ap.ssid, ip_s, nm_s, gw_s, d1_s, d2_s, ap.rssi);
+        (char *)ap.ssid, ip_s, hostname, nm_s, gw_s, d1_s, d2_s, ap.rssi);
     httpd_resp_sendstr_chunk(req, net);
 
     httpd_resp_sendstr_chunk(req, HTML_B);
 
     /* Dynamic: settings panel */
-    char cfg[800];
+    char cfg[1100];
     snprintf(cfg, sizeof(cfg),
         "<form method=\"POST\" action=\"/settings\">"
         "<label><span>ESP32 Listen Port</span>"
@@ -437,15 +440,20 @@ static esp_err_t handler_root(httpd_req_t *req) {
         " placeholder=\"e.g. 192.168.1.100\"></label>"
         "<label><span>ONYX Server Port</span>"
         "<input type=\"number\" name=\"srv_port\" value=\"%u\" min=\"1\" max=\"65535\"></label>"
+        "<label><span>Hostname</span>"
+        "<input type=\"text\" name=\"hostname\" value=\"%s\" maxlength=\"63\""
+        " placeholder=\"onyxosc\"></label>"
         "<p class=\"hint\">"
         "ONYX \xe2\x86\x92 ESP32: set OSC output destination to <b>%s : %u</b><br>"
-        "ESP32 \xe2\x86\x92 ONYX: sends to <b>%s : %u</b>"
+        "ESP32 \xe2\x86\x92 ONYX: sends to <b>%s : %u</b><br>"
+        "Access this page at <b>%s.local</b>"
         "</p>"
         "<button class=\"primary\" type=\"submit\">Save &amp; Restart</button>"
         "</form>"
         "<button class=\"primary\" style=\"margin-top:.75rem\""
         " onclick=\"syncOnyx()\">&#x21BA; Sync from ONYX</button>",
-        port, onyx_ip, server_port, ip_s, port, onyx_ip[0] ? onyx_ip : "ONYX-IP", server_port);
+        port, onyx_ip, server_port, hostname,
+        ip_s, port, onyx_ip[0] ? onyx_ip : "ONYX-IP", server_port, hostname);
     httpd_resp_sendstr_chunk(req, cfg);
     httpd_resp_sendstr_chunk(req, HTML_CAL);
     httpd_resp_sendstr_chunk(req, HTML_BUILD_INFO);
@@ -524,7 +532,7 @@ static esp_err_t handler_api_press(httpd_req_t *req) {
 }
 
 static esp_err_t handler_settings(httpd_req_t *req) {
-    char body[128] = {};
+    char body[256] = {};
     int len = httpd_req_recv(req, body, sizeof(body) - 1);
     if (len <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty body");
@@ -532,17 +540,23 @@ static esp_err_t handler_settings(httpd_req_t *req) {
     }
     body[len] = '\0';
 
-    char port_str[8] = {}, srv_port_str[8] = {}, onyx_ip[32] = {};
+    char port_str[8] = {}, srv_port_str[8] = {}, onyx_ip[32] = {}, hostname[64] = {};
     parse_field(body, "port",     port_str,     sizeof(port_str));
     parse_field(body, "srv_port", srv_port_str, sizeof(srv_port_str));
     parse_field(body, "onyx_ip",  onyx_ip,      sizeof(onyx_ip));
+    parse_field(body, "hostname", hostname,     sizeof(hostname));
 
     uint16_t port     = (uint16_t)atoi(port_str);
     uint16_t srv_port = (uint16_t)atoi(srv_port_str);
     if (port     == 0) port     = ONYX_OSC_PORT;
     if (srv_port == 0) srv_port = ONYX_SERVER_PORT;
 
-    onyx_save_settings(port, srv_port, onyx_ip);
+    /* Strip ".local" suffix if user typed the full address */
+    char *dot = strstr(hostname, ".local");
+    if (dot) *dot = '\0';
+    if (hostname[0] == '\0') strlcpy(hostname, ONYX_MDNS_HOSTNAME, sizeof(hostname));
+
+    onyx_save_settings(port, srv_port, onyx_ip, hostname);
 
     httpd_resp_set_type(req, "text/html");
     esp_err_t ret = httpd_resp_send(req, HTML_SAVED, HTTPD_RESP_USE_STRLEN);

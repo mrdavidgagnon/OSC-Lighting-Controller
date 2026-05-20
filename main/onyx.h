@@ -5,7 +5,8 @@
 #define ONYX_OSC_PORT    9000       /* default ESP32 listen port; overridden by NVS  */
 #define ONYX_SERVER_PORT 8000       /* default ONYX console OSC port; overridden by NVS */
 #define ONYX_FADER_MAX  255.0f      /* ONYX native fader range (DMX, 0–255)    */
-#define ONYX_NVS_NS     "osc_cfg"   /* NVS namespace for OSC settings          */
+#define ONYX_NVS_NS       "osc_cfg"   /* NVS namespace for OSC settings          */
+#define ONYX_MDNS_HOSTNAME "onyxosc"  /* default mDNS hostname → onyxosc.local   */
 
 /* 20 fader strips: bases 4200–4290 (faders 1–10) then 4600–4690 (faders 11–20) */
 #define ONYX_NUM_FADERS 20
@@ -64,7 +65,9 @@ void onyx_log_event(const char *addr, char type, const char *val);
 uint16_t onyx_load_port(void);
 uint16_t onyx_load_server_port(void);
 void     onyx_load_onyx_ip(char *buf, size_t len);
-void     onyx_save_settings(uint16_t listen_port, uint16_t server_port, const char *onyx_ip);
+void     onyx_load_hostname(char *buf, size_t len);
+void     onyx_save_settings(uint16_t listen_port, uint16_t server_port,
+                             const char *onyx_ip, const char *hostname);
 
 /* Send an OSC button press to the ONYX console (val=1 press, val=0 release) */
 void onyx_send_button_press(int id, int val);
