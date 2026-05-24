@@ -365,7 +365,10 @@ static void dispatch(const char *addr, osc_msg_t *msg) {
                 uint32_t rgba = (uint32_t)osc_int(msg, 0);
                 snprintf(cs, sizeof(cs), "#%06" PRIx32, (rgba >> 8) & 0xFFFFFFu);
             }
-            if (cs[0]) cache_button_color(id, cs);
+            if (cs[0]) {
+                cache_button_color(id, cs);
+                if (s_color_cb) s_color_cb(id, cs);
+            }
 
         } else if (strcmp(rest, "/text/color") == 0) {
             char cs[16] = "";

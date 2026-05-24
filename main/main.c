@@ -17,12 +17,21 @@ static void on_fader(int id, float value) {
 
 static void on_button_text(int id, const char *text) {
     ESP_LOGD(TAG, "button %d text = \"%s\"", id, text);
-    if (id == onyx_faders[0].button)
+    if (id == onyx_faders[0].button) {
         oled_display_set_fader_name(text);
+        /* Grab cached color now that we know this channel's data is fresh */
+        char color[16] = {};
+        if (onyx_get_fader(onyx_faders[0].fader, NULL, color, sizeof(color)) && color[0])
+            oled_display_set_channel_color(color);
+        else if (onyx_get_button_color(id, color, sizeof(color)) && color[0])
+            oled_display_set_channel_color(color);
+    }
 }
 
 static void on_fader_color(int id, const char *color) {
     ESP_LOGD(TAG, "fader %d color = %s", id, color);
+    if (id == onyx_faders[0].fader || id == onyx_faders[0].button)
+        oled_display_set_channel_color(color);
 }
 
 void app_main(void) {

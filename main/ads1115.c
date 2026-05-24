@@ -1,7 +1,6 @@
 #include "ads1115.h"
 #include "i2c_bus.h"
 #include "onyx.h"
-#include "oled_display.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -122,7 +121,6 @@ static esp_err_t wait_ready(void) {
 
 static void ads_task(void *arg) {
     float last_sent_f[4] = {-999.0f, -999.0f, -999.0f, -999.0f};
-    int   last_disp       = -1;
 
     while (1) {
         for (int ch = 0; ch < 4; ch++) {
@@ -143,17 +141,6 @@ static void ads_task(void *arg) {
             }
 
             float out_f = apply_cal_f(ch, s_ema[ch]);
-
-            /* Update OLED immediately for ch0 — no waiting for OSC round-trip. */
-            if (ch == 0) {
-                int disp_val = (int)(out_f + 0.5f);
-                if (disp_val < 0)   disp_val = 0;
-                if (disp_val > 255) disp_val = 255;
-                if (disp_val != last_disp) {
-                    oled_display_set_local_fader(disp_val);
-                    last_disp = disp_val;
-                }
-            }
 
             if (fabsf(out_f - last_sent_f[ch]) >= 1.0f) {
                 last_sent_f[ch] = out_f;

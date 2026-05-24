@@ -9,14 +9,17 @@
 
 static const char *TAG = "oled";
 
-#define OLED_HOST   SPI2_HOST
-#define OLED_W      128
-#define OLED_PAGES    8
+#define TFT_HOST  SPI2_HOST
+#define C_BLACK   0x0000u
+#define C_WHITE   0xFFFFu
 
 static spi_device_handle_t s_spi;
+static bool     s_ok      = false;
+static uint16_t s_bg      = C_BLACK;
+static char     s_name[16] = "";
 
-/* ---------- 5x7 font, ASCII 32–126 -------------------------------------- */
-/* Each entry: 5 column bytes, LSB = top pixel row */
+/* ---------- 5×7 font, ASCII 32–126 ------------------------------------ */
+/* Each entry: 5 column bytes, bit-0 = top pixel row */
 static const uint8_t FONT[95][5] = {
     {0x00,0x00,0x00,0x00,0x00}, /* ' ' */
     {0x00,0x00,0x5F,0x00,0x00}, /* '!' */
@@ -115,18 +118,16 @@ static const uint8_t FONT[95][5] = {
     {0x10,0x08,0x08,0x10,0x08}, /* '~' */
 };
 
-/* ---------- SSD1306 low-level ------------------------------------------- */
+/* ---------- SPI helpers ------------------------------------------------ */
 
 static void IRAM_ATTR spi_pre_cb(spi_transaction_t *t)
 {
     gpio_set_level(OLED_PIN_DC, (int)(uintptr_t)t->user);
 }
 
-static bool s_ok = false;
-
-static void oled_send(bool is_data, const uint8_t *buf, size_t len)
+static void tft_send(bool is_data, const uint8_t *buf, size_t len)
 {
-    if (!s_ok) return;
+    if (!s_ok || len == 0) return;
     spi_transaction_t t = {
         .length    = len * 8,
         .tx_buffer = buf,
@@ -134,98 +135,151 @@ static void oled_send(bool is_data, const uint8_t *buf, size_t len)
     };
     esp_err_t err = spi_device_transmit(s_spi, &t);
     if (err != ESP_OK)
-        ESP_LOGE(TAG, "SPI tx failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "SPI tx: %s", esp_err_to_name(err));
 }
 
-static void oled_cmd(uint8_t cmd)
+static void tft_cmd(uint8_t cmd)  { tft_send(false, &cmd, 1); }
+static void tft_data1(uint8_t d)  { tft_send(true,  &d,   1); }
+
+/* ---------- Display primitives ---------------------------------------- */
+
+static void tft_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
 {
-    oled_send(false, &cmd, 1);
+    uint8_t caset[4] = {
+        (uint8_t)((x0 + TFT_COL_OFFSET) >> 8), (uint8_t)((x0 + TFT_COL_OFFSET) & 0xFF),
+        (uint8_t)((x1 + TFT_COL_OFFSET) >> 8), (uint8_t)((x1 + TFT_COL_OFFSET) & 0xFF),
+    };
+    uint8_t raset[4] = {
+        (uint8_t)((y0 + TFT_ROW_OFFSET) >> 8), (uint8_t)((y0 + TFT_ROW_OFFSET) & 0xFF),
+        (uint8_t)((y1 + TFT_ROW_OFFSET) >> 8), (uint8_t)((y1 + TFT_ROW_OFFSET) & 0xFF),
+    };
+    tft_cmd(0x2A); tft_send(true, caset, 4);  /* CASET */
+    tft_cmd(0x2B); tft_send(true, raset, 4);  /* RASET */
+    tft_cmd(0x2C);                             /* RAMWR */
 }
 
-static void oled_set_pos(uint8_t page, uint8_t col)
-{
-    oled_cmd(0xB0 | (page & 0x07));
-    oled_cmd(0x00 | (col & 0x0F));
-    oled_cmd(0x10 | ((col >> 4) & 0x07));
-}
+/* Static buffer for fill and char-row sends (DMA-safe, DRAM).
+ * Must hold the widest possible row: TFT_W pixels × 2 bytes. */
+static uint8_t s_row_buf[TFT_W * 2];
 
-static void oled_fill_page(uint8_t page, uint8_t fill)
+static void tft_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 {
-    static uint8_t row[OLED_W];
-    memset(row, fill, OLED_W);
-    oled_set_pos(page, 0);
-    oled_send(true, row, OLED_W);
-}
-
-static void oled_draw_string(uint8_t page, const char *s)
-{
-    uint8_t col = 0;
-    while (*s && col + 6 <= OLED_W) {
-        uint8_t buf[6];
-        char c = *s++;
-        if (c < 32 || c > 126) c = '?';
-        memcpy(buf, FONT[(uint8_t)c - 32], 5);
-        buf[5] = 0x00;
-        oled_set_pos(page, col);
-        oled_send(true, buf, 6);
-        col += 6;
+    if (!s_ok || w == 0 || h == 0) return;
+    tft_set_window(x, y, x + w - 1, y + h - 1);
+    uint8_t hi = color >> 8, lo = color & 0xFF;
+    int chunk = (w <= TFT_W) ? (int)w : TFT_W;
+    for (int i = 0; i < chunk * 2; i += 2) { s_row_buf[i] = hi; s_row_buf[i+1] = lo; }
+    for (uint16_t row = 0; row < h; row++) {
+        int rem = (int)w;
+        while (rem > 0) {
+            int n = (rem < chunk) ? rem : chunk;
+            tft_send(true, s_row_buf, (size_t)(n * 2));
+            rem -= n;
+        }
     }
 }
 
-/* Expand each bit in a nibble to two bits: 0b0101 → 0b00110011 */
-static const uint8_t EXPAND[16] = {
-    0x00, 0x03, 0x0C, 0x0F,
-    0x30, 0x33, 0x3C, 0x3F,
-    0xC0, 0xC3, 0xCC, 0xCF,
-    0xF0, 0xF3, 0xFC, 0xFF,
-};
-
-/* 2x scaled character: 10px wide × 16px tall (2 pages).
-   Each original column is doubled; each row-bit is doubled across two pages. */
-static void oled_draw_char_2x(uint8_t page, uint8_t col, char c)
+/* Draw a character at N× scale. Sets a full (5N)×(7N) window and streams
+ * pixel data one row at a time using s_row_buf (max 110 bytes, N≤11). */
+static void tft_draw_char_scaled(uint16_t x, uint16_t y, char c, int N,
+                                  uint16_t fg, uint16_t bg)
 {
     if (c < 32 || c > 126) c = '?';
     const uint8_t *g = FONT[(uint8_t)c - 32];
-    uint8_t p0[10], p1[10];
-    for (int i = 0; i < 5; i++) {
-        uint8_t lo = EXPAND[g[i] & 0x0F];       /* lower 4 rows → page 0 */
-        uint8_t hi = EXPAND[(g[i] >> 4) & 0x0F]; /* upper 4 rows → page 1 */
-        p0[i * 2] = p0[i * 2 + 1] = lo;
-        p1[i * 2] = p1[i * 2 + 1] = hi;
+    int w = 5 * N, h = 7 * N;
+    tft_set_window(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    for (int r = 0; r < h; r++) {
+        int glyph_row = r / N;
+        for (int ci = 0; ci < w; ci++) {
+            uint16_t color = (g[ci / N] & (1 << glyph_row)) ? fg : bg;
+            s_row_buf[ci * 2]     = (uint8_t)(color >> 8);
+            s_row_buf[ci * 2 + 1] = (uint8_t)(color & 0xFF);
+        }
+        tft_send(true, s_row_buf, (size_t)(w * 2));
     }
-    oled_set_pos(page,     col); oled_send(true, p0, 10);
-    oled_set_pos(page + 1, col); oled_send(true, p1, 10);
 }
 
-static void oled_draw_string_2x(uint8_t page, const char *s)
+/* Pick the largest integer scale N such that:
+ *   all L chars fit within TFT_W  (5*L*N + L-1 ≤ TFT_W)
+ *   the char height fits TFT_H    (7*N ≤ TFT_H) */
+static int pick_scale(int len)
 {
-    uint8_t col = 0;
-    while (*s && col + 10 <= OLED_W)
-        oled_draw_char_2x(page, col, *s++), col += 10;
+    if (len <= 0) return 1;
+    for (int n = TFT_H / 7; n >= 1; n--) {
+        if (5 * len * n + (len - 1) <= TFT_W)
+            return n;
+    }
+    return 1;
 }
 
-/* ---------- public API --------------------------------------------------- */
+/* Parse "#rrggbb" or "rrggbb" → RGB565. Accounts for BGR MADCTL bit. */
+static uint16_t parse_color(const char *hex)
+{
+    if (!hex) return C_BLACK;
+    const char *p = (*hex == '#') ? hex + 1 : hex;
+    if (strlen(p) < 6) return C_BLACK;
+    uint8_t r = 0, g = 0, b = 0;
+    for (int i = 0; i < 6; i++) {
+        char c = p[i];
+        uint8_t nib;
+        if      (c >= '0' && c <= '9') nib = (uint8_t)(c - '0');
+        else if (c >= 'a' && c <= 'f') nib = (uint8_t)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') nib = (uint8_t)(c - 'A' + 10);
+        else return C_BLACK;
+        if      (i < 2) r = (uint8_t)((r << 4) | nib);
+        else if (i < 4) g = (uint8_t)((g << 4) | nib);
+        else            b = (uint8_t)((b << 4) | nib);
+    }
+#if (TFT_MADCTL) & 0x08
+    /* BGR mode: bits[15:11]=B, bits[10:5]=G, bits[4:0]=R */
+    return (uint16_t)(((uint16_t)(b >> 3) << 11) | ((uint16_t)(g >> 2) << 5) | (r >> 3));
+#else
+    return (uint16_t)(((uint16_t)(r >> 3) << 11) | ((uint16_t)(g >> 2) << 5) | (b >> 3));
+#endif
+}
+
+/* ---------- Internal redraw ------------------------------------------- */
+
+static void redraw(void)
+{
+    if (!s_ok) return;
+    tft_fill_rect(0, 0, TFT_W, TFT_H, s_bg);
+
+    int len = (int)strlen(s_name);
+    if (len == 0) return;
+
+    int scale   = pick_scale(len);
+    int text_w  = 5 * len * scale + (len - 1);
+    int text_h  = 7 * scale;
+    uint16_t x  = (uint16_t)((TFT_W - text_w) / 2);
+    uint16_t y  = (uint16_t)((TFT_H - text_h) / 2);
+
+    for (int i = 0; i < len; i++) {
+        tft_draw_char_scaled(x, y, s_name[i], scale, C_WHITE, s_bg);
+        x = (uint16_t)(x + 5 * scale + 1);
+    }
+}
+
+/* ---------- Public API ------------------------------------------------- */
 
 void oled_display_init(void)
 {
-    ESP_LOGI(TAG, "SPI OLED init: SCK=GPIO%d MOSI=GPIO%d CS=GPIO%d DC=GPIO%d RST=GPIO%d",
+    ESP_LOGI(TAG, "ST7735S landscape init: SCK=GPIO%d MOSI=GPIO%d CS=GPIO%d DC=GPIO%d RST=GPIO%d",
              OLED_PIN_SCK, OLED_PIN_MOSI, OLED_PIN_CS, OLED_PIN_DC, OLED_PIN_RST);
 
     gpio_config_t io = {
         .pin_bit_mask = (1ULL << OLED_PIN_DC) | (1ULL << OLED_PIN_RST),
         .mode         = GPIO_MODE_OUTPUT,
     };
-    esp_err_t err = gpio_config(&io);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "GPIO config failed: %s — check DC=GPIO%d RST=GPIO%d",
-                 esp_err_to_name(err), OLED_PIN_DC, OLED_PIN_RST);
+    if (gpio_config(&io) != ESP_OK) {
+        ESP_LOGE(TAG, "GPIO config failed");
         return;
     }
 
     gpio_set_level(OLED_PIN_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(OLED_PIN_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(150));
 
     spi_bus_config_t buscfg = {
         .mosi_io_num     = OLED_PIN_MOSI,
@@ -233,104 +287,76 @@ void oled_display_init(void)
         .sclk_io_num     = OLED_PIN_SCK,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
-        .max_transfer_sz = OLED_W * OLED_PAGES,
+        .max_transfer_sz = TFT_W * TFT_H * 2,
     };
-    err = spi_bus_initialize(OLED_HOST, &buscfg, SPI_DMA_CH_AUTO);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "SPI bus init failed: %s — check SCK=GPIO%d MOSI=GPIO%d",
-                 esp_err_to_name(err), OLED_PIN_SCK, OLED_PIN_MOSI);
+    if (spi_bus_initialize(TFT_HOST, &buscfg, SPI_DMA_CH_AUTO) != ESP_OK) {
+        ESP_LOGE(TAG, "SPI bus init failed");
         return;
     }
 
     spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = 8 * 1000 * 1000,
+        .clock_speed_hz = 20 * 1000 * 1000,
         .mode           = 0,
         .spics_io_num   = OLED_PIN_CS,
         .queue_size     = 1,
         .pre_cb         = spi_pre_cb,
     };
-    err = spi_bus_add_device(OLED_HOST, &devcfg, &s_spi);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "SPI add device failed: %s — check CS=GPIO%d",
-                 esp_err_to_name(err), OLED_PIN_CS);
-        spi_bus_free(OLED_HOST);
+    if (spi_bus_add_device(TFT_HOST, &devcfg, &s_spi) != ESP_OK) {
+        ESP_LOGE(TAG, "SPI add device failed");
+        spi_bus_free(TFT_HOST);
         return;
     }
 
     s_ok = true;
 
-    static const uint8_t init_cmds[] = {
-        0xAE,       /* display off           */
-        0xD5, 0x80, /* clock div             */
-        0xA8, 0x3F, /* multiplex 1/64        */
-        0xD3, 0x00, /* display offset        */
-        0x40,       /* start line 0          */
-        0x8D, 0x14, /* charge pump on        */
-        0x20, 0x00, /* horizontal addr mode  */
-        0xA1,       /* seg remap             */
-        0xC8,       /* com scan dec          */
-        0xDA, 0x12, /* com pins config       */
-        0x81, 0xCF, /* contrast              */
-        0xD9, 0xF1, /* pre-charge period     */
-        0xDB, 0x40, /* vcomh deselect level  */
-        0xA4,       /* display from RAM      */
-        0xA6,       /* normal (not inverted) */
-        0xAF,       /* display on            */
-    };
-    for (size_t i = 0; i < sizeof(init_cmds); i++)
-        oled_cmd(init_cmds[i]);
+    tft_cmd(0x01); vTaskDelay(pdMS_TO_TICKS(150)); /* SWRESET */
+    tft_cmd(0x11); vTaskDelay(pdMS_TO_TICKS(120)); /* SLPOUT  */
 
-    for (int p = 0; p < OLED_PAGES; p++)
-        oled_fill_page(p, 0x00);
+    tft_cmd(0xB1); tft_data1(0x05); tft_data1(0x3C); tft_data1(0x3C);  /* FRMCTR1 */
+    tft_cmd(0xB2); tft_data1(0x05); tft_data1(0x3C); tft_data1(0x3C);  /* FRMCTR2 */
+    tft_cmd(0xB3);
+        tft_data1(0x05); tft_data1(0x3C); tft_data1(0x3C);             /* FRMCTR3 */
+        tft_data1(0x05); tft_data1(0x3C); tft_data1(0x3C);
+    tft_cmd(0xB4); tft_data1(0x03);                                      /* INVCTR  */
+    tft_cmd(0xC0); tft_data1(0x28); tft_data1(0x08); tft_data1(0x04);   /* PWCTR1  */
+    tft_cmd(0xC1); tft_data1(0xC0);                                      /* PWCTR2  */
+    tft_cmd(0xC2); tft_data1(0x0D); tft_data1(0x00);                    /* PWCTR3  */
+    tft_cmd(0xC3); tft_data1(0x8D); tft_data1(0x6A);                    /* PWCTR4  */
+    tft_cmd(0xC4); tft_data1(0x8D); tft_data1(0xEE);                    /* PWCTR5  */
+    tft_cmd(0xC5); tft_data1(0x0E);                                      /* VMCTR1  */
+    tft_cmd(0x36); tft_data1(TFT_MADCTL);                                 /* MADCTL  */
+    tft_cmd(0x3A); tft_data1(0x05);                                       /* COLMOD 16-bit */
 
-    oled_draw_string(0, "FADER 1");
-    oled_fill_page(1, 0x08); /* thin separator line */
+    static const uint8_t gpos[16] = {
+        0x10,0x0E,0x02,0x03,0x0E,0x07,0x02,0x07,
+        0x0A,0x12,0x27,0x37,0x00,0x0D,0x0E,0x10};
+    tft_cmd(0xE0); tft_send(true, gpos, 16);                             /* GMCTRP1 */
+    static const uint8_t gneg[16] = {
+        0x10,0x0E,0x03,0x03,0x0F,0x06,0x02,0x08,
+        0x0A,0x13,0x26,0x36,0x00,0x0D,0x0E,0x10};
+    tft_cmd(0xE1); tft_send(true, gneg, 16);                             /* GMCTRN1 */
 
-    ESP_LOGI(TAG, "SSD1306 initialized OK");
+    tft_cmd(0x13); vTaskDelay(pdMS_TO_TICKS(10));                        /* NORON   */
+    tft_cmd(0x29); vTaskDelay(pdMS_TO_TICKS(100));                       /* DISPON  */
+
+    /* Show startup state — replaced by first OSC name/color update */
+    strncpy(s_name, "OSC", sizeof(s_name) - 1);
+    s_name[sizeof(s_name) - 1] = '\0';
+    redraw();
+    ESP_LOGI(TAG, "ST7735S %dx%d landscape OK", TFT_W, TFT_H);
 }
 
 void oled_display_set_fader_name(const char *name)
 {
-    oled_fill_page(2, 0x00);
-    oled_fill_page(3, 0x00);
-
-    if (!name || !*name) return;
-
-    char buf[13];
-    strncpy(buf, name, 12);
-    buf[12] = '\0';
-
-    oled_draw_string_2x(2, buf);
-    ESP_LOGI(TAG, "name -> \"%s\"", name);
+    strncpy(s_name, name ? name : "", sizeof(s_name) - 1);
+    s_name[sizeof(s_name) - 1] = '\0';
+    ESP_LOGI(TAG, "name -> \"%s\"", s_name);
+    redraw();
 }
 
-/* Draw a vertical fader track in pages 4-7 (bottom 32 px).
-   A 2-pixel-thick horizontal line marks the current position.
-   val=255 → line near top; val=0 → line near bottom. */
-void oled_display_set_local_fader(int val)
+void oled_display_set_channel_color(const char *hex_color)
 {
-    if (!s_ok) return;
-    if (val < 0)   val = 0;
-    if (val > 255) val = 255;
-
-    /* Map 0-255 to row 1-29 within the 32-row zone (rows 0 and 31 are border).
-       2-px line, so start row 1 (val=255) … 28 (val=0). */
-    int line_row = 1 + (27 * (255 - val) / 255);
-
-    uint8_t buf[OLED_W];
-    for (int p = 0; p < 4; p++) {
-        /* Build the column byte for non-border columns this page. */
-        uint8_t col_byte = 0;
-        for (int bit = 0; bit < 8; bit++) {
-            int row = p * 8 + bit;
-            if (row == 0 || row == 31)                   col_byte |= (1 << bit); /* h-border */
-            if (row == line_row || row == line_row + 1)  col_byte |= (1 << bit); /* marker   */
-        }
-
-        for (int x = 0; x < OLED_W; x++)
-            buf[x] = (x == 0 || x == OLED_W - 1) ? 0xFF : col_byte;
-
-        oled_set_pos(4 + p, 0);
-        oled_send(true, buf, OLED_W);
-    }
+    s_bg = parse_color(hex_color);
+    ESP_LOGI(TAG, "color -> %s (0x%04X)", hex_color ? hex_color : "null", s_bg);
+    redraw();
 }
