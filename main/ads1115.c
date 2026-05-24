@@ -1,6 +1,7 @@
 #include "ads1115.h"
 #include "i2c_bus.h"
 #include "onyx.h"
+#include "diag.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -11,7 +12,7 @@ static const char *TAG = "ads1115";
 
 #define REG_CONV   0x00
 #define REG_CFG    0x01
-#define CFG_LOW    0x83   /* DR=128SPS, comparator disabled */
+#define CFG_LOW    0xE3   /* DR=860SPS, comparator disabled */
 #define ADS_NVS_NS "ads_cal"
 
 static const int s_fader_id[4] = {4203, 4213, 4223, 4233};
@@ -93,26 +94,32 @@ static float apply_cal_f(int ch, float raw) {
 static esp_err_t start_conversion(int ch) {
     uint8_t cfg_hi = 0x80 | ((uint8_t)(4 + ch) << 4) | 0x03;
     uint8_t buf[3] = {REG_CFG, cfg_hi, CFG_LOW};
-    return i2c_master_transmit(s_dev, buf, sizeof(buf), 50);
+    esp_err_t ret = i2c_master_transmit(s_dev, buf, sizeof(buf), 10);
+    diag_i2c_count(ret == ESP_OK);
+    return ret;
 }
 
 static esp_err_t read_conversion(int16_t *out) {
     uint8_t ptr = REG_CONV;
     uint8_t data[2];
-    esp_err_t ret = i2c_master_transmit_receive(s_dev, &ptr, 1, data, 2, 50);
+    esp_err_t ret = i2c_master_transmit_receive(s_dev, &ptr, 1, data, 2, 10);
+    diag_i2c_count(ret == ESP_OK);
     if (ret == ESP_OK)
         *out = (int16_t)((data[0] << 8) | data[1]);
     return ret;
 }
 
+/* At 860 SPS a conversion finishes in ~1.2 ms.  Poll with taskYIELD() between
+   reads so higher-priority tasks aren't starved; 30 attempts × ~0.1 ms = 3 ms max. */
 static esp_err_t wait_ready(void) {
     uint8_t ptr = REG_CFG;
     uint8_t cfg[2];
-    for (int i = 0; i < 20; i++) {
-        vTaskDelay(1);
-        if (i2c_master_transmit_receive(s_dev, &ptr, 1, cfg, 2, 50) == ESP_OK
-                && (cfg[0] & 0x80))
+    for (int i = 0; i < 30; i++) {
+        esp_err_t ret = i2c_master_transmit_receive(s_dev, &ptr, 1, cfg, 2, 10);
+        diag_i2c_count(ret == ESP_OK);
+        if (ret == ESP_OK && (cfg[0] & 0x80))
             return ESP_OK;
+        taskYIELD();
     }
     return ESP_ERR_TIMEOUT;
 }
@@ -152,7 +159,7 @@ static void ads_task(void *arg) {
                 snprintf(addr,    sizeof(addr),    "/Mx/fader/%d", s_fader_id[ch]);
                 snprintf(val_str, sizeof(val_str), "%d", val);
                 onyx_log_event(addr, 'f', val_str);
-                ESP_LOGI(TAG, "ch%d fader %d = %d (raw=%d)", ch, s_fader_id[ch], val, (int)raw);
+                ESP_LOGD(TAG, "ch%d fader %d = %d (raw=%d)", ch, s_fader_id[ch], val, (int)raw);
             }
         }
     }
@@ -188,7 +195,7 @@ esp_err_t ads1115_start(void) {
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address  = ADS_I2C_ADDR,
-        .scl_speed_hz    = 100000,
+        .scl_speed_hz    = 400000,
     };
     esp_err_t ret = i2c_master_bus_add_device(i2c_bus_handle(), &dev_cfg, &s_dev);
     if (ret != ESP_OK) {

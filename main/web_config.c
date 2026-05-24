@@ -1,6 +1,7 @@
 #include "web_config.h"
 #include "onyx.h"
 #include "ads1115.h"
+#include "diag.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -130,6 +131,7 @@ static const char HTML_A[] =
     "<button class=\"tab\" onclick=\"show('mon',this)\">Virtual Console</button>"
     "<button class=\"tab\" onclick=\"show('osc',this)\">Event Monitor</button>"
     "<button class=\"tab\" onclick=\"show('cfg',this)\">Settings</button>"
+    "<button class=\"tab\" onclick=\"show('diag',this)\">Diagnostics</button>"
     "</div>"
     "<div id=\"p-net\" class=\"panel active\">";
 
@@ -150,9 +152,13 @@ static const char HTML_B[] =
 
 /* FOOT: end settings panel → card → JS → body/html */
 static const char HTML_C[] =
-    "</div></div>"
+    "</div>"   /* close p-cfg */
+    "<div id=\"p-diag\" class=\"panel\">"
+    "<table id=\"diag-tbl\"><tr><td colspan=\"2\" style=\"color:#888\">Loading…</td></tr></table>"
+    "</div>"
+    "</div>"   /* close card */
     "<script>"
-    "var T=null,OT=null,oscSince=0;"
+    "var T=null,OT=null,DT=null,oscSince=0,oscEpoch=0;"
     "var _dc=document.createElement('canvas');"
     "_dc.width=_dc.height=1;"
     "var _dx=_dc.getContext('2d');"
@@ -164,7 +170,10 @@ static const char HTML_C[] =
       "return'rgb('+(d[0]>>1)+','+(d[1]>>1)+','+(d[2]>>1)+')';}"
     "function pollOsc(){"
       "fetch('/api/osc-log?since='+oscSince).then(function(r){return r.json();})"
-      ".then(function(arr){"
+      ".then(function(resp){"
+        "if(resp.e&&resp.e!==oscEpoch){oscEpoch=resp.e;oscSince=0;"
+          "document.getElementById('osc-log').innerHTML='';}"
+        "var arr=resp.log||[];"
         "if(!arr.length)return;"
         "var log=document.getElementById('osc-log');"
         "arr.forEach(function(e){"
@@ -179,6 +188,24 @@ static const char HTML_C[] =
       "document.getElementById('osc-log').innerHTML='';}"
     "function syncOnyx(){"
       "fetch('/api/sync',{method:'POST'}).catch(function(){});}"
+    "function pollDiag(){"
+      "fetch('/api/diag').then(function(r){return r.json();})"
+      ".then(function(d){"
+        "var rows=["
+          "['Uptime',d.uptime_s+'s'],"
+          "['CPU',d.cpu_mhz+' MHz'],"
+          "['Heap free',d.heap_free+' B'],"
+          "['Heap min',d.heap_min+' B'],"
+          "['WiFi RSSI',d.wifi_rssi+' dBm (ch '+d.wifi_ch+')'],"
+          "['I²C ok/err',d.i2c_ok+' / '+d.i2c_err],"
+          "['SPI ok/err',d.spi_ok+' / '+d.spi_err],"
+          "['OSC packets',d.osc_pkts]"
+        "];"
+        "var t=document.getElementById('diag-tbl');"
+        "t.innerHTML=rows.map(function(r){"
+          "return'<tr><td style=\"color:#aaa;width:45%\">'+r[0]+'</td><td style=\"font-family:monospace\">'+r[1]+'</td></tr>';"
+        "}).join('');"
+      "}).catch(function(){});}"
     "var FDRS=["
       "{fi:4203,bi:4204,l1:4201,l2:4202,l3:4205},"
       "{fi:4213,bi:4214,l1:4211,l2:4212,l3:4215},"
@@ -229,9 +256,12 @@ static const char HTML_C[] =
       "document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});"
       "document.getElementById('p-'+id).classList.add('active');"
       "btn.classList.add('active');"
-      "if(id==='mon'){poll();T=setInterval(poll,300);if(OT){clearInterval(OT);OT=null;}}"
-      "else if(id==='osc'){pollOsc();OT=setInterval(pollOsc,500);if(T){clearInterval(T);T=null;}}"
-      "else{if(T){clearInterval(T);T=null;}if(OT){clearInterval(OT);OT=null;}}"
+      "if(T){clearInterval(T);T=null;}"
+      "if(OT){clearInterval(OT);OT=null;}"
+      "if(DT){clearInterval(DT);DT=null;}"
+      "if(id==='mon'){poll();T=setInterval(poll,300);}"
+      "else if(id==='osc'){pollOsc();OT=setInterval(pollOsc,500);}"
+      "else if(id==='diag'){pollDiag();DT=setInterval(pollDiag,2000);}"
     "}"
     "function poll(){"
       "fetch('/api/fader').then(function(r){return r.json();})"
@@ -300,6 +330,7 @@ static const char HTML_C[] =
         "document.getElementById('ff-'+i),"
         "sts[i],f.fi);"
     "});"
+    "poll();"
     "var calLo=null;"
     "function calLow(){"
       "fetch('/api/cal/low',{method:'POST'}).then(function(r){return r.json();})"
@@ -575,8 +606,11 @@ static esp_err_t handler_api_osc_log(httpd_req_t *req) {
     onyx_log_entry_t entries[32];
     int n = onyx_get_osc_log(since, entries, 32);
 
+    char hdr[48];
+    snprintf(hdr, sizeof(hdr), "{\"e\":%" PRIu32 ",\"log\":[", onyx_get_boot_epoch());
+
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr_chunk(req, "[");
+    httpd_resp_sendstr_chunk(req, hdr);
     for (int i = 0; i < n; i++) {
         char addr_esc[130] = {}, val_esc[68] = {};
         json_esc(entries[i].addr, addr_esc, sizeof(addr_esc));
@@ -591,8 +625,31 @@ static esp_err_t handler_api_osc_log(httpd_req_t *req) {
             val_esc);
         httpd_resp_sendstr_chunk(req, line);
     }
-    httpd_resp_sendstr_chunk(req, "]");
+    httpd_resp_sendstr_chunk(req, "]}");
     return httpd_resp_sendstr_chunk(req, NULL);
+}
+
+static esp_err_t handler_api_diag(httpd_req_t *req) {
+    diag_snapshot_t d = {};
+    diag_snapshot(&d);
+    char json[256];
+    snprintf(json, sizeof(json),
+        "{\"uptime_s\":%" PRIu32
+        ",\"heap_free\":%" PRIu32
+        ",\"heap_min\":%" PRIu32
+        ",\"cpu_mhz\":%" PRIu32
+        ",\"wifi_rssi\":%" PRId32
+        ",\"wifi_ch\":%u"
+        ",\"i2c_ok\":%" PRIu32
+        ",\"i2c_err\":%" PRIu32
+        ",\"spi_ok\":%" PRIu32
+        ",\"spi_err\":%" PRIu32
+        ",\"osc_pkts\":%" PRIu32 "}",
+        d.uptime_s, d.heap_free, d.heap_min, d.cpu_mhz,
+        (int32_t)d.wifi_rssi, (unsigned)d.wifi_ch,
+        d.i2c_ok, d.i2c_err, d.spi_ok, d.spi_err, d.osc_pkts);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, json);
 }
 
 static esp_err_t handler_api_sync(httpd_req_t *req) {
@@ -636,7 +693,7 @@ void web_config_start(esp_netif_t *netif, web_config_forget_cb_t on_forget) {
 
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.stack_size      = 8192;
-    config.max_uri_handlers = 11;
+    config.max_uri_handlers = 12;
     config.lru_purge_enable = true;
 
     httpd_handle_t server = NULL;
@@ -654,6 +711,7 @@ void web_config_start(esp_netif_t *netif, web_config_forget_cb_t on_forget) {
         { .uri = "/api/sync",      .method = HTTP_POST, .handler = handler_api_sync      },
         { .uri = "/api/cal/low",   .method = HTTP_POST, .handler = handler_api_cal_low   },
         { .uri = "/api/cal/high",  .method = HTTP_POST, .handler = handler_api_cal_high  },
+        { .uri = "/api/diag",      .method = HTTP_GET,  .handler = handler_api_diag      },
         { .uri = "/settings",   .method = HTTP_POST, .handler = handler_settings   },
         { .uri = "/forget",     .method = HTTP_POST, .handler = handler_forget     },
     };

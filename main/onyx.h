@@ -58,6 +58,9 @@ typedef struct {
 /* Returns up to max_out entries with seq > since; entries are in arrival order. */
 int onyx_get_osc_log(uint32_t since, onyx_log_entry_t *out, int max_out);
 
+/* A random value generated at each boot — changes when device resets. */
+uint32_t onyx_get_boot_epoch(void);
+
 /* Push an arbitrary event into the log (e.g. outgoing button presses). */
 void onyx_log_event(const char *addr, char type, const char *val);
 

@@ -1,4 +1,5 @@
 #include "oled_display.h"
+#include "diag.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -17,6 +18,7 @@ static spi_device_handle_t s_spi;
 static bool     s_ok      = false;
 static uint16_t s_bg      = C_BLACK;
 static char     s_name[16] = "";
+static TaskHandle_t s_disp_task = NULL;
 
 /* ---------- 5×7 font, ASCII 32–126 ------------------------------------ */
 /* Each entry: 5 column bytes, bit-0 = top pixel row */
@@ -134,6 +136,7 @@ static void tft_send(bool is_data, const uint8_t *buf, size_t len)
         .user      = (void *)(uintptr_t)(is_data ? 1 : 0),
     };
     esp_err_t err = spi_device_transmit(s_spi, &t);
+    diag_spi_count(err == ESP_OK);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "SPI tx: %s", esp_err_to_name(err));
 }
@@ -238,6 +241,21 @@ static uint16_t parse_color(const char *hex)
 #endif
 }
 
+static void redraw(void);  /* forward declaration */
+
+/* ---------- Display task ----------------------------------------------- */
+
+/* Runs at low priority. Wakes on xTaskNotifyGive from the setter functions.
+ * Multiple rapid updates coalesce into a single redraw because
+ * ulTaskNotifyTake(pdTRUE,...) clears the count on each wake. */
+static void display_task(void *arg)
+{
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        redraw();
+    }
+}
+
 /* ---------- Internal redraw ------------------------------------------- */
 
 static void redraw(void)
@@ -339,10 +357,12 @@ void oled_display_init(void)
     tft_cmd(0x13); vTaskDelay(pdMS_TO_TICKS(10));                        /* NORON   */
     tft_cmd(0x29); vTaskDelay(pdMS_TO_TICKS(100));                       /* DISPON  */
 
-    /* Show startup state — replaced by first OSC name/color update */
+    /* Draw startup state synchronously (task doesn't exist yet) */
     strncpy(s_name, "OSC", sizeof(s_name) - 1);
     s_name[sizeof(s_name) - 1] = '\0';
     redraw();
+
+    xTaskCreate(display_task, "oled_disp", 4096, NULL, 3, &s_disp_task);
     ESP_LOGI(TAG, "ST7735S %dx%d landscape OK", TFT_W, TFT_H);
 }
 
@@ -351,12 +371,12 @@ void oled_display_set_fader_name(const char *name)
     strncpy(s_name, name ? name : "", sizeof(s_name) - 1);
     s_name[sizeof(s_name) - 1] = '\0';
     ESP_LOGI(TAG, "name -> \"%s\"", s_name);
-    redraw();
+    if (s_disp_task) xTaskNotifyGive(s_disp_task);
 }
 
 void oled_display_set_channel_color(const char *hex_color)
 {
     s_bg = parse_color(hex_color);
     ESP_LOGI(TAG, "color -> %s (0x%04X)", hex_color ? hex_color : "null", s_bg);
-    redraw();
+    if (s_disp_task) xTaskNotifyGive(s_disp_task);
 }
